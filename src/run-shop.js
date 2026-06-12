@@ -24,6 +24,7 @@ export class RunShop {
     this._msg = '';
     this._msgT = 0;
     this._msgGood = true;
+    this._selected = -1;
   }
 
   show(items, onBuy, onLeave, now) {
@@ -33,6 +34,7 @@ export class RunShop {
     this._openTime = now;
     this._msg = '';
     this._msgT = 0;
+    this._selected = -1;
   }
 
   update(dt) {
@@ -51,9 +53,15 @@ export class RunShop {
       if (this._hit(this._rects[i], x, y)) {
         const item = this.items[i];
         if (item.sold) return;
+        // Two-tap: first tap selects, second tap buys.
+        if (this._selected !== i) {
+          this._selected = i;
+          return;
+        }
         const ok = this.onBuy ? this.onBuy(item) : false;
         if (ok) {
           item.sold = true;
+          this._selected = -1;
           this._toast('Purchased!', true);
         } else {
           this._toast('Not enough pearls', false);
@@ -61,6 +69,7 @@ export class RunShop {
         return;
       }
     }
+    this._selected = -1;
   }
 
   _hit(r, x, y) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
@@ -107,13 +116,16 @@ export class RunShop {
 
       this._rects.push({ x: itemX, y, w: itemW, h: itemH });
 
+      const selected = this._selected === i;
       ctx.save();
       if (item.sold) ctx.globalAlpha *= 0.35;
-      ctx.fillStyle = afford ? 'rgba(10,30,55,0.95)' : 'rgba(18,26,40,0.85)';
+      if (selected) { ctx.shadowBlur = 18; ctx.shadowColor = color; }
+      ctx.fillStyle = selected ? 'rgba(16,42,72,0.98)' : afford ? 'rgba(10,30,55,0.95)' : 'rgba(18,26,40,0.85)';
       ctx.strokeStyle = item.sold ? 'rgba(90,105,130,0.4)' : color;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = selected ? 2.5 : 1.5;
       roundRect(ctx, itemX, y, itemW, itemH, 12);
       ctx.fill(); ctx.stroke();
+      ctx.shadowBlur = 0;
 
       ctx.textAlign = 'left';
       ctx.font = "bold 15px 'Courier New', monospace";
@@ -133,12 +145,20 @@ export class RunShop {
       }
       ctx.fillText(desc, itemX + 16, y + 46);
 
-      // Price
+      // Price / confirm hint
       ctx.textAlign = 'right';
       if (item.sold) {
         ctx.font = "bold 13px 'Courier New', monospace";
         ctx.fillStyle = PAL.good;
         ctx.fillText('SOLD', itemX + itemW - 14, y + itemH / 2 + 5);
+      } else if (selected) {
+        const pulse = 0.65 + Math.sin(time / 180) * 0.35;
+        ctx.save();
+        ctx.globalAlpha *= pulse;
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`BUY ${item.price}?`, itemX + itemW - 14, y + itemH / 2 + 5);
+        ctx.restore();
       } else {
         ctx.font = "bold 16px 'Courier New', monospace";
         ctx.fillStyle = afford ? PAL.pearl : PAL.danger;

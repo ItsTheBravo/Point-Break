@@ -39,6 +39,8 @@ export class FloorMapScreen {
     this._tapRects = []; // [{layer,idx,x,y,r}]
     this._hoverLayer = -1;
     this._hoverIdx   = -1;
+    this._selLayer   = -1;
+    this._selIdx     = -1;
     this._openTime   = 0;
   }
 
@@ -46,6 +48,8 @@ export class FloorMapScreen {
     this._openTime = now;
     this._hoverLayer = -1;
     this._hoverIdx   = -1;
+    this._selLayer   = -1;
+    this._selIdx     = -1;
   }
 
   handleMove(x, y, mapState) {
@@ -63,7 +67,7 @@ export class FloorMapScreen {
     }
   }
 
-  // Returns {layer, idx} if a valid available node was tapped, else null.
+  // Returns {layer, idx} when a selected node is tapped a second time, else null.
   handleTap(x, y, mapState, now) {
     if (now - this._openTime < 400) return null;
     const avail = availableNext(mapState);
@@ -72,9 +76,17 @@ export class FloorMapScreen {
       if (!isAvail) continue;
       const dx = x - rect.x, dy = y - rect.y;
       if (dx * dx + dy * dy < (rect.r + 12) ** 2) {
-        return { layer: rect.layer, idx: rect.idx };
+        // Two-tap: first tap selects, second tap on the same node dives.
+        if (this._selLayer === rect.layer && this._selIdx === rect.idx) {
+          return { layer: rect.layer, idx: rect.idx };
+        }
+        this._selLayer = rect.layer;
+        this._selIdx = rect.idx;
+        return null;
       }
     }
+    this._selLayer = -1;
+    this._selIdx = -1;
     return null;
   }
 
@@ -147,7 +159,8 @@ export class FloorMapScreen {
         const isCurrent  = mapState.currentLayer === li && mapState.currentIdx === ni;
         const isVisited  = mapState.visited.has(`${li},${ni}`);
         const isAvail    = avail.some(a => a.layer === li && a.idx === ni);
-        const isHover    = this._hoverLayer === li && this._hoverIdx === ni;
+        const isSelected = this._selLayer === li && this._selIdx === ni;
+        const isHover    = (this._hoverLayer === li && this._hoverIdx === ni) || isSelected;
 
         this._tapRects.push({ layer: li, idx: ni, x: pos.x, y: pos.y, r });
 
@@ -210,6 +223,17 @@ export class FloorMapScreen {
           ctx.font = `10px 'Courier New', monospace`;
           ctx.fillStyle = 'rgba(57,230,255,0.6)';
           ctx.fillText('✓', pos.x + r * 0.6, pos.y - r * 0.6);
+        }
+
+        // Confirm hint on selected node.
+        if (isSelected) {
+          const cPulse = 0.65 + Math.sin(time / 170) * 0.35;
+          ctx.save();
+          ctx.globalAlpha *= cPulse;
+          ctx.font = "bold 10px 'Courier New', monospace";
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText('TAP AGAIN TO DIVE', pos.x, pos.y - r - 18);
+          ctx.restore();
         }
 
         ctx.restore();

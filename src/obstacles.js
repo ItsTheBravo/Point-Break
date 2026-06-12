@@ -424,8 +424,8 @@ export class ObstacleManager {
   }
 
   update(speed, step, dt, time, distPx, biomeId) {
-    const ramp = Math.min(0.5, this.totalDist / 10000);
-    const difficulty = Math.max(this._roomBaseDiff, Math.min(1, this._roomBaseDiff + ramp));
+    const ramp = Math.min(0.25, this.totalDist / 30000);
+    const difficulty = Math.min(1, this._roomBaseDiff + ramp);
     this.totalDist += speed * step;
 
     while (this.spawnQueue.length > 0 && this.spawnQueue[0].at <= this.totalDist) {
@@ -433,11 +433,12 @@ export class ObstacleManager {
     }
 
     if (this._roomMode !== 'boss' && this.totalDist >= this._nextRegularSpawn) {
-      const spacing = this._roomMode === 'treasure'
-        ? 540
-        : Math.max(120, TUNE.obstacleSpacingStart - (TUNE.obstacleSpacingStart - TUNE.obstacleSpacingMin) * difficulty);
-      this._nextRegularSpawn = this.totalDist + spacing;
-      this._schedulePattern(difficulty, biomeId);
+      const spacing = Math.max(170,
+        TUNE.obstacleSpacingStart - (TUNE.obstacleSpacingStart - TUNE.obstacleSpacingMin) * difficulty);
+      // Schedule the next pattern from the END of this one, so patterns
+      // can never overlap into impassable walls.
+      const patternEnd = this._schedulePattern(difficulty, biomeId);
+      this._nextRegularSpawn = patternEnd + spacing;
     }
 
     for (const o of this.items) {
@@ -448,63 +449,53 @@ export class ObstacleManager {
     return difficulty;
   }
 
+  // Returns the (distance) end of the scheduled pattern so the caller can
+  // space the next one from there.
   _schedulePattern(difficulty, biomeId) {
     const d = this.totalDist;
     // Combat rooms mix flavours pattern-by-pattern for in-room variety.
     const mode = (this._roomMode === 'combat' || this._roomMode === 'elite')
       ? ['corridor', 'ice_gauntlet', 'hazard'][Math.floor(Math.random() * 3)]
       : this._roomMode;
-
-    if (mode === 'treasure') {
-      this.spawnQueue.push({ at: d, fn: (m) => {
-        const gap = Math.min(TUNE.gapStart + 55, m.H * 0.58);
-        const gapY = 80 + gap / 2 + Math.random() * (m.H - 160 - gap);
-        m.items.push(new PillarPair(m.W + 30, gapY, gap, 'rock', m.H));
-      }});
-      this.spawnQueue.sort((a, b) => a.at - b.at);
-      return;
-    }
+    let end = d + 60;
 
     if (mode === 'ice_gauntlet') {
       const roll = Math.random();
-      if (roll < 0.55) this._queueIceGauntlet(difficulty);
+      if (roll < 0.55) end = this._queueIceGauntlet(difficulty);
       else if (roll < 0.8) this.spawnQueue.push({ at: d, fn: (m, di) => m._spawnPillars('ice', di) });
-      else this._queueChicane(difficulty);
-      this.spawnQueue.sort((a, b) => a.at - b.at);
-      return;
-    }
-
-    if (mode === 'hazard') {
+      else end = this._queueChicane(difficulty);
+    } else if (mode === 'hazard') {
       const roll = Math.random();
-      if (roll < 0.3) this._queueMineField(Math.min(1, difficulty + 0.2));
-      else if (roll < 0.55) this._queueLaserSection(difficulty);
+      if (roll < 0.3) end = this._queueMineField(Math.min(1, difficulty + 0.2));
+      else if (roll < 0.55) end = this._queueLaserSection(difficulty);
       else if (roll < 0.78) {
         for (let i = 0; i < 3; i++) {
           this.spawnQueue.push({ at: d + i * 155, fn: (m) => {
             m.items.push(new SpikeWheel(m.W + 30, 70 + Math.random() * (m.H - 140)));
           }});
         }
-      } else this._queueCompression(Math.min(1, difficulty + 0.15));
-      this.spawnQueue.sort((a, b) => a.at - b.at);
-      return;
+        end = d + 360;
+      } else end = this._queueCompression(Math.min(1, difficulty + 0.15));
+    } else {
+      // corridor: mixed pattern
+      const roll = Math.random();
+      if (difficulty < 0.2 || roll < 0.35) {
+        this.spawnQueue.push({ at: d, fn: (m, diff) => m._spawnPillars(Math.random() < 0.4 ? 'ice' : 'rock', diff) });
+      } else if (roll < 0.52) {
+        end = this._queueChicane(difficulty);
+      } else if (roll < 0.64) {
+        end = this._queueIceGauntlet(difficulty);
+      } else if (roll < 0.76 && difficulty > 0.25) {
+        end = this._queueLaserSection(difficulty);
+      } else if (roll < 0.86 && difficulty > 0.15) {
+        end = this._queueMineField(difficulty);
+      } else {
+        end = this._queueCompression(difficulty);
+      }
     }
 
-    // corridor: existing mixed pattern
-    const roll = Math.random();
-    if (difficulty < 0.2 || roll < 0.35) {
-      this.spawnQueue.push({ at: d, fn: (m, diff) => m._spawnPillars(Math.random() < 0.4 ? 'ice' : 'rock', diff) });
-    } else if (roll < 0.52) {
-      this._queueChicane(difficulty);
-    } else if (roll < 0.64) {
-      this._queueIceGauntlet(difficulty);
-    } else if (roll < 0.76 && difficulty > 0.25) {
-      this._queueLaserSection(difficulty);
-    } else if (roll < 0.86 && difficulty > 0.15) {
-      this._queueMineField(difficulty);
-    } else {
-      this._queueCompression(difficulty);
-    }
     this.spawnQueue.sort((a, b) => a.at - b.at);
+    return end;
   }
 
   _queueChicane(diff) {
@@ -516,6 +507,7 @@ export class ObstacleManager {
       { at: d + sep, fn: (m, di) => m._spawnPillarsAt(d + sep, 'rock', di, 'bot') },
       { at: d + sep * 2, fn: (m, di) => m._spawnPillarsAt(d + sep * 2, 'rock', di, 'top') },
     );
+    return d + sep * 2 + 60;
   }
 
   _queueIceGauntlet(diff) {
@@ -525,6 +517,7 @@ export class ObstacleManager {
     for (let i = 0; i < 3; i++) {
       this.spawnQueue.push({ at: d + sep * i, fn: (m, di) => m._spawnPillars('ice', di) });
     }
+    return d + sep * 2 + 60;
   }
 
   _queueLaserSection(diff) {
@@ -534,15 +527,16 @@ export class ObstacleManager {
     const y1 = margin + Math.random() * (this.H * 0.3);
     const y2 = y1 + span;
     this.spawnQueue.push({ at: d, fn: (m) => m.items.push(new LaserGate(m.W + 30, y1, y2)) });
-    // Add a pillar before to funnel the player.
-    this.spawnQueue.push({ at: d - 160, fn: (m, di) => m._spawnPillars('rock', di) });
+    return d + 80;
   }
 
   _queueMineField(diff) {
     const d = this.totalDist;
     const count = 3 + Math.floor(diff * 4);
+    let maxOffset = 0;
     for (let i = 0; i < count; i++) {
       const offset = i * (50 + Math.random() * 40);
+      maxOffset = Math.max(maxOffset, offset);
       this.spawnQueue.push({
         at: d + offset,
         fn: (m) => {
@@ -551,6 +545,7 @@ export class ObstacleManager {
         },
       });
     }
+    return d + maxOffset + 60;
   }
 
   _queueCompression(diff) {
@@ -570,6 +565,7 @@ export class ObstacleManager {
         },
       });
     }
+    return d + sep * 2 + 60;
   }
 
   _spawnPillars(kind, difficulty) {

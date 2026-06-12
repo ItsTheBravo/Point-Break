@@ -143,6 +143,7 @@ export class RelicPicker {
     this.onPick = null;
     this.openTime = 0;
     this._hoverIdx = -1;
+    this._selectedIdx = -1;
     this._cards = [];
   }
 
@@ -151,6 +152,7 @@ export class RelicPicker {
     this.onPick = onPick;
     this.openTime = now;
     this._hoverIdx = -1;
+    this._selectedIdx = -1;
   }
 
   handleTap(x, y, now) {
@@ -158,10 +160,16 @@ export class RelicPicker {
     for (let i = 0; i < this._cards.length; i++) {
       const c = this._cards[i];
       if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) {
-        if (this.onPick) this.onPick(this.choices[i]);
+        // Two-tap: first tap selects, second tap on same card confirms.
+        if (this._selectedIdx === i) {
+          if (this.onPick) this.onPick(this.choices[i]);
+        } else {
+          this._selectedIdx = i;
+        }
         return;
       }
     }
+    this._selectedIdx = -1; // tap outside deselects
   }
 
   handleMove(x, y) {
@@ -213,7 +221,8 @@ export class RelicPicker {
 
       this._cards.push({ x: cx, y: Math.round(slideY), w: CARD_W, h: CARD_H });
 
-      const hover = this._hoverIdx === i;
+      const hover = this._hoverIdx === i || this._selectedIdx === i;
+      const selected = this._selectedIdx === i;
       const liftY = hover ? -8 : 0;
 
       ctx.save();
@@ -262,10 +271,18 @@ export class RelicPicker {
       this._wrapText(ctx, relic.desc, cx + CARD_W / 2, slideY + 152, CARD_W - 20, 15);
 
       // Tap hint
-      if (hover) {
+      if (selected) {
+        const pulse = 0.65 + Math.sin(now / 180) * 0.35;
+        ctx.save();
+        ctx.globalAlpha *= pulse;
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('[ TAP AGAIN TO TAKE ]', cx + CARD_W / 2, slideY + CARD_H - 12);
+        ctx.restore();
+      } else if (hover) {
         ctx.font = "bold 10px 'Courier New', monospace";
         ctx.fillStyle = rarity.color;
-        ctx.fillText('[ TAP TO PICK ]', cx + CARD_W / 2, slideY + CARD_H - 12);
+        ctx.fillText('[ TAP TO INSPECT ]', cx + CARD_W / 2, slideY + CARD_H - 12);
       }
 
       ctx.restore();

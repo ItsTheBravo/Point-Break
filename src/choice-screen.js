@@ -18,6 +18,7 @@ export class ChoiceScreen {
     this._openTime = 0;
     this._cards = [];
     this._hover = -1;
+    this._selected = -1;
   }
 
   show(title, subtitle, options, onPick, now) {
@@ -27,6 +28,7 @@ export class ChoiceScreen {
     this.onPick = onPick;
     this._openTime = now;
     this._hover = -1;
+    this._selected = -1;
   }
 
   handleMove(x, y) {
@@ -42,10 +44,16 @@ export class ChoiceScreen {
     for (let i = 0; i < this._cards.length; i++) {
       const c = this._cards[i];
       if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) {
-        if (this.onPick) this.onPick(i);
+        // Two-tap: first tap selects, second tap confirms.
+        if (this._selected === i) {
+          if (this.onPick) this.onPick(i);
+        } else {
+          this._selected = i;
+        }
         return;
       }
     }
+    this._selected = -1;
   }
 
   draw(ctx, W, H, time) {
@@ -84,7 +92,8 @@ export class ChoiceScreen {
       const ease = 1 - Math.pow(1 - prog, 3);
       const cx = (W - cardW) / 2;
       const cy = startY + i * (cardH + gap) + 40 * (1 - ease);
-      const hover = this._hover === i;
+      const selected = this._selected === i;
+      const hover = this._hover === i || selected;
 
       this._cards.push({ x: cx, y: cy, w: cardW, h: cardH });
 
@@ -111,7 +120,16 @@ export class ChoiceScreen {
       ctx.fillStyle = 'rgba(180,210,235,0.85)';
       this._wrap(ctx, opt.desc, cx + 18, cy + 52, cardW - 36, 15);
 
-      if (hover) {
+      if (selected) {
+        const pulse = 0.65 + Math.sin(time / 180) * 0.35;
+        ctx.save();
+        ctx.globalAlpha *= pulse;
+        ctx.textAlign = 'right';
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('TAP AGAIN ✓', cx + cardW - 14, cy + 30);
+        ctx.restore();
+      } else if (hover) {
         ctx.textAlign = 'right';
         ctx.font = "bold 11px 'Courier New', monospace";
         ctx.fillStyle = opt.color;

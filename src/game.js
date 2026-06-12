@@ -182,7 +182,9 @@ export class Game {
     this.currentRoom = room;
     this.roomDistPx = 0;
     this.roomLengthPx = (room.lengthM || 0) * TUNE.pxPerMeter;
-    this._roomReward = (room.type === 'treasure' || room.type === 'elite') ? 'relic' : null;
+    // Relics come from danger: elites and bosses (plus shops/events).
+    // Treasure rooms are pearls-only so safe routes don't dominate.
+    this._roomReward = room.type === 'elite' ? 'relic' : null;
 
     const cycleScale = 1 + this.cycleN * 0.25;
     this.speed = floor.baseSpeed * cycleScale;
@@ -208,8 +210,8 @@ export class Game {
       if (room.type === 'treasure') {
         this._treasureTimer = 0;
         // Spread pearls to the RIGHT of the player so all are reachable.
-        for (let i = 0; i < 38; i++) {
-          const golden = Math.random() < 0.22;
+        for (let i = 0; i < 26; i++) {
+          const golden = Math.random() < 0.12;
           this.pearls._spawnAt(
             this.player.x + 60 + Math.random() * (this.W - this.player.x - 120),
             55 + Math.random() * (this.H - 110),
@@ -372,6 +374,10 @@ export class Game {
     Sound.milestone();
     this.shake.add(0.4);
     this.flash.trigger(PAL.good, 0.22);
+    // Danger pays: clear bonus for fighting through instead of floating.
+    const bonusByType = { combat: 12, elite: 30 };
+    const bonus = this.currentRoom.ambush ? 20 : (bonusByType[this.currentRoom.type] || 0);
+    if (bonus > 0) this._gainPearls(bonus, this.W / 2, this.H * 0.4, false);
     const earned = this.sessionPearls - this._roomStartPearls;
     this.banners.add(earned > 0 ? `CLEAR!  +${earned} PEARLS` : 'CLEAR!', PAL.good);
     this.particles.emit(this.W / 2, this.H / 2, {
@@ -884,11 +890,11 @@ export class Game {
     // Treasure room: timer-based end + trickle in more pearls.
     if (isTreasure) {
       this._treasureTimer += dtRaw;
-      if (Math.random() < 0.015 && this.pearls.items.filter(p => !p.collected).length < 18) {
+      if (Math.random() < 0.012 && this.pearls.items.filter(p => !p.collected).length < 12) {
         this.pearls._spawnAt(
           this.W * (0.55 + Math.random() * 0.35),
           60 + Math.random() * (this.H - 120),
-          Math.random() < 0.2
+          Math.random() < 0.1
         );
       }
       if (this._treasureTimer >= TREASURE_DUR) this._roomClear();
