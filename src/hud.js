@@ -1,5 +1,6 @@
 import { PAL, TUNE } from './constants.js';
-import { RELICS, RARITY } from './relics.js';
+import { RARITY } from './relics.js';
+import { drawIcon as drawRelicIcon } from './relic-picker.js';
 
 function drawHeart(ctx, x, y, s, filled) {
   ctx.save();
@@ -182,11 +183,7 @@ export class HUD {
         ctx.lineWidth = 1.2;
         roundRect(ctx, bx, ry, relicSize, relicSize, 6);
         ctx.fill(); ctx.stroke();
-        // Simple coloured dot as placeholder icon.
-        ctx.fillStyle = rarity.color;
-        ctx.beginPath();
-        ctx.arc(bx + relicSize / 2, ry + relicSize / 2, 5, 0, Math.PI * 2);
-        ctx.fill();
+        drawRelicIcon(ctx, r.icon, bx + relicSize / 2, ry + relicSize / 2, 8, rarity.color);
       }
       ctx.restore();
     }

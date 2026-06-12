@@ -17,7 +17,7 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawIcon(ctx, iconId, cx, cy, s, color) {
+export function drawIcon(ctx, iconId, cx, cy, s, color) {
   ctx.save();
   ctx.translate(cx, cy);
   ctx.strokeStyle = color;

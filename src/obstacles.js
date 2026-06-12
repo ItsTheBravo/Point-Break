@@ -419,7 +419,8 @@ export class ObstacleManager {
     this.items = [];
     this.totalDist = 0;
     this.spawnQueue = [];
-    this._nextRegularSpawn = this._roomMode === 'boss' ? 999999 : 240;
+    const noSpawn = this._roomMode === 'boss' || this._roomMode === 'treasure';
+    this._nextRegularSpawn = noSpawn ? Infinity : 240;
   }
 
   update(speed, step, dt, time, distPx, biomeId) {
@@ -449,7 +450,10 @@ export class ObstacleManager {
 
   _schedulePattern(difficulty, biomeId) {
     const d = this.totalDist;
-    const mode = this._roomMode;
+    // Combat rooms mix flavours pattern-by-pattern for in-room variety.
+    const mode = (this._roomMode === 'combat' || this._roomMode === 'elite')
+      ? ['corridor', 'ice_gauntlet', 'hazard'][Math.floor(Math.random() * 3)]
+      : this._roomMode;
 
     if (mode === 'treasure') {
       this.spawnQueue.push({ at: d, fn: (m) => {

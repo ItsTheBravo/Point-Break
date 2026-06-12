@@ -4,10 +4,10 @@ import { PAL } from './constants.js';
 // Hooks receive the game object and can mutate its state directly.
 
 export const RARITY = {
-  common:    { label: 'COMMON',    color: '#94a3b8', glow: 'rgba(148,163,184,0.3)' },
-  uncommon:  { label: 'UNCOMMON',  color: '#3b82f6', glow: 'rgba(59,130,246,0.4)' },
-  rare:      { label: 'RARE',      color: '#a855f7', glow: 'rgba(168,85,247,0.5)' },
-  legendary: { label: 'LEGENDARY', color: PAL.legendary, glow: 'rgba(245,158,11,0.6)' },
+  common:    { label: 'COMMON',    color: '#94a3b8', glow: 'rgba(148,163,184,0.3)', price: 25 },
+  uncommon:  { label: 'UNCOMMON',  color: '#3b82f6', glow: 'rgba(59,130,246,0.4)',  price: 45 },
+  rare:      { label: 'RARE',      color: '#a855f7', glow: 'rgba(168,85,247,0.5)',  price: 70 },
+  legendary: { label: 'LEGENDARY', color: PAL.legendary, glow: 'rgba(245,158,11,0.6)', price: 100 },
 };
 
 export const RELICS = {
@@ -157,6 +157,87 @@ export const RELICS = {
         g._spawnPhantom();
       }
     },
+  },
+
+  comb_jelly: {
+    name: 'Comb Jelly',
+    rarity: 'common',
+    desc: 'Combo window lasts 2.5s longer.',
+    icon: 'wave',
+    apply(g) { g._comboWindowBonus = (g._comboWindowBonus || 0) + 2500; },
+  },
+
+  deep_pockets: {
+    name: 'Deep Pockets',
+    rarity: 'common',
+    desc: 'Pearls are worth +30% more.',
+    icon: 'gem',
+    apply(g) { g.player.stats.pearlValue *= 1.3; },
+  },
+
+  dash_battery: {
+    name: 'Dash Battery',
+    rarity: 'common',
+    desc: 'Dash cooldown reduced by 30%.',
+    icon: 'bolt',
+    apply(g) { g.player.stats.dashCooldown *= 0.7; },
+  },
+
+  pearl_lens: {
+    name: 'Pearl Lens',
+    rarity: 'common',
+    desc: 'Pearl magnet radius greatly increased.',
+    icon: 'star',
+    apply(g) { g.player.stats.magnetRadius = (g.player.stats.magnetRadius || 0) + 120; },
+  },
+
+  featherfall: {
+    name: 'Featherfall',
+    rarity: 'common',
+    desc: 'You sink 35% slower.',
+    icon: 'drop',
+    apply(g) { g.player.stats.gravityMult = (g.player.stats.gravityMult || 1) * 0.65; },
+  },
+
+  golden_hull: {
+    name: 'Golden Hull',
+    rarity: 'uncommon',
+    desc: 'Gain a bubble shield now and at the start of each floor.',
+    icon: 'ring',
+    apply(g) { g.player.shield++; },
+    onFloorStart(g) { g.player.shield++; },
+  },
+
+  glacier_surf: {
+    name: 'Glacier Surf',
+    rarity: 'uncommon',
+    desc: 'Smashing ice extends your dash by 0.5s — chain it!',
+    icon: 'wave',
+    // Effect handled in game collision via hasRelic check.
+  },
+
+  slipstream: {
+    name: 'Slipstream',
+    rarity: 'uncommon',
+    desc: 'Reflected boss projectiles award +6 pearls.',
+    icon: 'lightning',
+    onReflect(g, p) { g._gainPearls(6, p.x, p.y, false); },
+  },
+
+  diamond_tusk: {
+    name: 'Diamond Tusk',
+    rarity: 'rare',
+    desc: 'Your dash shatters ROCK pillars too.',
+    icon: 'gem',
+    // Effect handled in game collision via hasRelic check.
+  },
+
+  second_wind: {
+    name: 'Second Wind',
+    rarity: 'rare',
+    desc: 'Once per run, a fatal hit leaves you at 1 HP instead.',
+    icon: 'heart',
+    // Effect handled in game._applyDamage via hasRelic check.
   },
 
 };

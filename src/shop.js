@@ -210,7 +210,7 @@ export class Shop {
     if (this.runPearls > 0) {
       ctx.font = "12px 'Courier New', monospace";
       ctx.fillStyle = PAL.good;
-      ctx.fillText(`+${this.runPearls} this run`, W / 2, y + 16);
+      ctx.fillText(`+${this.runPearls} banked (half of unspent)`, W / 2, y + 16);
     }
     y += 30;
 

@@ -154,7 +154,7 @@ export class Player {
   }
 
   update(dt, step, speed) {
-    this.vy = Math.min(TUNE.maxFall, this.vy + TUNE.gravity * step);
+    this.vy = Math.min(TUNE.maxFall, this.vy + TUNE.gravity * (this.stats.gravityMult || 1) * step);
     this.y += this.vy * step;
 
     // Tilt with velocity; level out while dashing.

@@ -10,11 +10,15 @@ import { HUD } from './hud.js';
 import { Shop } from './shop.js';
 import { StartScreen } from './screens.js';
 import { Shake, Flash, FloatingTexts, Ripples, Banners } from './juice.js';
-import { RELICS, pickRelicChoices } from './relics.js';
+import { RELICS, RARITY, pickRelicChoices } from './relics.js';
 import { RelicPicker } from './relic-picker.js';
-import { FLOORS, ROOM_ICONS, buildFloorMap, availableNext, advanceMap } from './floor-data.js';
+import { FLOORS, ROOM_ICONS, buildFloorMap, advanceMap } from './floor-data.js';
 import { FloorMapScreen } from './floor-map.js';
 import { createBoss } from './boss.js';
+import { ChoiceScreen } from './choice-screen.js';
+import { RunShop } from './run-shop.js';
+
+const TREASURE_DUR = 20000;
 
 export class Game {
   constructor(canvas) {
@@ -24,6 +28,8 @@ export class Game {
     this._resize();
     window.addEventListener('resize', () => this._resize());
 
+    // States: start | map | playing | room-clear | relic-pick | run-shop |
+    //         choice | victory | dying | shop
     this.state = 'start';
     this.time = 0;
     this.lastTs = 0;
@@ -44,6 +50,8 @@ export class Game {
     this.obstacles = new ObstacleManager(this.W, this.H);
     this.pearls = new PearlManager(this.W, this.H);
     this.floorMapScreen = new FloorMapScreen();
+    this.choiceScreen = new ChoiceScreen();
+    this.runShop = new RunShop();
 
     this.Sound = Sound;
 
@@ -86,6 +94,7 @@ export class Game {
     this.boss = null;
     this._bossDefeatedHandled = false;
     this.roomClearTimer = 0;
+    this._roomReward = null;
     this.floorIdx = 0;
     this.mapState = null;
     this.cycleN = 0;
@@ -98,11 +107,15 @@ export class Game {
     this._phantomTimer = 0;
     this._adrenalineActive = false;
     this._phantomGhosts = [];
+    this._secondWindUsed = false;
+    this._comboWindowBonus = 0;
   }
 
   _buildPlayer() {
     this.player = new Player(this.W * 0.24, this.H / 2, buildStats());
   }
+
+  get comboWindow() { return TUNE.comboWindowMs + (this._comboWindowBonus || 0); }
 
   // ── Run lifecycle ───────────────────────────────────────────────────────
 
@@ -129,6 +142,7 @@ export class Game {
     this.bg.startTransition(this._currentBiome, this._currentBiome);
     this.banners.add(floor.name, this._currentBiome.glowColor || PAL.cyan);
     Sound.biomeTransition();
+    this._fireRelicHook('onFloorStart');
     this.state = 'map';
     this.floorMapScreen.open(this.time);
   }
@@ -143,14 +157,28 @@ export class Game {
     this._bossDefeatedHandled = false;
   }
 
+  // ── Room entry dispatch ─────────────────────────────────────────────────
+
   _enterRoom(layer, idx) {
     const floor = FLOORS[this.floorIdx];
     const room = floor.layers[layer][idx];
     advanceMap(this.mapState, layer, idx);
+    this.currentRoom = room;
 
+    switch (room.type) {
+      case 'shop':  this._openRunShop(); return;
+      case 'rest':  this._openRest();    return;
+      case 'event': this._openEvent();   return;
+      default:      this._startRoomPlay(room);
+    }
+  }
+
+  _startRoomPlay(room) {
+    const floor = FLOORS[this.floorIdx];
     this.currentRoom = room;
     this.roomDistPx = 0;
     this.roomLengthPx = (room.lengthM || 0) * TUNE.pxPerMeter;
+    this._roomReward = (room.type === 'treasure' || room.type === 'elite') ? 'relic' : null;
 
     const cycleScale = 1 + this.cycleN * 0.25;
     this.speed = floor.baseSpeed * cycleScale;
@@ -158,7 +186,10 @@ export class Game {
     this._currentBiome = BIOMES[floor.biomeIdx];
     this.bg.startTransition(this._currentBiome, this._currentBiome);
 
-    this.obstacles.setRoomMode(room.type, floor.baseDifficulty);
+    const diff = room.type === 'elite'
+      ? Math.min(1, floor.baseDifficulty + 0.25)
+      : floor.baseDifficulty;
+    this.obstacles.setRoomMode(room.type, diff);
     this.obstacles.resetForRoom();
     this.pearls.reset();
 
@@ -170,11 +201,11 @@ export class Game {
       this._bossDefeatedHandled = false;
       if (room.type === 'treasure') {
         this._treasureTimer = 0;
-        // Spread pearls across the entire visible screen — CotL floating room feel.
+        // Spread pearls to the RIGHT of the player so all are reachable.
         for (let i = 0; i < 38; i++) {
           const golden = Math.random() < 0.22;
           this.pearls._spawnAt(
-            60 + Math.random() * (this.W - 120),
+            this.player.x + 60 + Math.random() * (this.W - this.player.x - 120),
             55 + Math.random() * (this.H - 110),
             golden
           );
@@ -182,15 +213,148 @@ export class Game {
       }
     }
 
-    // Reset player position, brief entry invincibility.
     this.player.y = this.H / 2;
     this.player.vy = 0;
     this.player.angle = 0;
     this.player.invincibleTimer = Math.max(this.player.invincibleTimer, 750);
 
     const icon = ROOM_ICONS[room.type];
-    this.banners.add(icon ? icon.label : room.type.toUpperCase(), icon?.color || PAL.cyan);
+    this.banners.add(
+      room.ambush ? 'AMBUSH!' : (icon ? icon.label : room.type.toUpperCase()),
+      room.ambush ? PAL.danger : (icon?.color || PAL.cyan)
+    );
     this.state = 'playing';
+  }
+
+  // ── Shop node ───────────────────────────────────────────────────────────
+
+  _openRunShop() {
+    const relics = pickRelicChoices(this.activeRelics, 3);
+    const items = relics.map(r => ({
+      kind: 'relic', relic: r, name: r.name, desc: r.desc,
+      price: RARITY[r.rarity].price, rarity: r.rarity, sold: false,
+    }));
+    items.push({ kind: 'heal',   name: 'Kelp Wrap',    desc: 'Restore 2 HP',      price: 30, sold: false });
+    items.push({ kind: 'shield', name: 'Bubble Charm', desc: '+1 bubble shield',  price: 35, sold: false });
+
+    this.runShop.show(items, (item) => {
+      if (this.sessionPearls < item.price) { Sound.deny(); return false; }
+      if (item.kind === 'heal' && this.player.health >= this.player.stats.maxHealth) {
+        Sound.deny(); return false;
+      }
+      this.sessionPearls -= item.price;
+      if (item.kind === 'relic') {
+        this.activeRelics.push(item.relic);
+        if (item.relic.apply) item.relic.apply(this);
+        this.banners.add(`${item.relic.name}!`, PAL.gold);
+      } else if (item.kind === 'heal') {
+        this.player.health = Math.min(this.player.stats.maxHealth, this.player.health + 2);
+      } else if (item.kind === 'shield') {
+        this.player.shield++;
+      }
+      Sound.buy();
+      return true;
+    }, () => {
+      Sound.tap();
+      this._openMap();
+    }, this.time);
+
+    this.state = 'run-shop';
+  }
+
+  // ── Rest node ───────────────────────────────────────────────────────────
+
+  _openRest() {
+    this.choiceScreen.show('CALM CURRENT', 'A safe pocket in the reef. Catch your breath.', [
+      { label: 'DEEP REST',  desc: 'Restore 3 HP.', color: '#ff7ab0' },
+      { label: 'TOUGHEN UP', desc: '+1 max HP (and heal 1).', color: PAL.danger },
+      { label: 'TUSK TUNING', desc: 'Dash cooldown −20% for this run.', color: PAL.cyan },
+    ], (i) => {
+      Sound.buy();
+      if (i === 0) {
+        this.player.health = Math.min(this.player.stats.maxHealth, this.player.health + 3);
+        this.banners.add('+3 HP', '#ff7ab0');
+      } else if (i === 1) {
+        this.player.stats.maxHealth++;
+        this.player.health++;
+        this.banners.add('+1 MAX HP', PAL.danger);
+      } else {
+        this.player.stats.dashCooldown *= 0.8;
+        this.banners.add('DASH TUNED', PAL.cyan);
+      }
+      this._openMap();
+    }, this.time);
+    this.state = 'choice';
+  }
+
+  // ── Event node ──────────────────────────────────────────────────────────
+
+  _openEvent() {
+    const events = [
+      {
+        title: 'SUNKEN WRECK',
+        subtitle: 'An old hull, dark inside. Something glints…',
+        risk: { label: 'DIVE IN', desc: '45% find a relic — 55% lose 2 HP to a moray.', color: '#c084fc' },
+        safe: { label: 'SCAVENGE OUTSIDE', desc: 'Safely gather +25 pearls.', color: PAL.good },
+        onRisk: () => {
+          if (Math.random() < 0.45) {
+            this.banners.add('RELIC FOUND!', PAL.gold);
+            this._offerRelics(() => this._openMap());
+            return true; // handled own transition
+          }
+          this.player.health = Math.max(1, this.player.health - 2);
+          this.banners.add('MORAY BITE! −2 HP', PAL.danger);
+          this.shake.add(0.5);
+          this.flash.trigger(PAL.danger, 0.3);
+          return false;
+        },
+        onSafe: () => { this._gainPearls(25, this.W / 2, this.H / 2, false); },
+      },
+      {
+        title: 'GLOWING SCHOOL',
+        subtitle: 'A shimmering school of fish darts into the dark.',
+        risk: { label: 'FOLLOW THEM', desc: '50% they lead to +60 pearls — 50% it\'s an ambush.', color: '#c084fc' },
+        safe: { label: 'LET THEM GO', desc: 'Snack on stragglers: +20 pearls.', color: PAL.good },
+        onRisk: () => {
+          if (Math.random() < 0.5) {
+            this._gainPearls(60, this.W / 2, this.H / 2, false);
+            this.banners.add('JACKPOT! +60', PAL.gold);
+            return false;
+          }
+          this.banners.add('IT\'S A TRAP!', PAL.danger);
+          this._startRoomPlay({ type: 'combat', lengthM: 30, ambush: true });
+          return true; // handled own transition
+        },
+        onSafe: () => { this._gainPearls(20, this.W / 2, this.H / 2, false); },
+      },
+      {
+        title: 'WHIRLPOOL',
+        subtitle: 'A spinning vortex hums with strange energy.',
+        risk: { label: 'RIDE IT', desc: '50% emerge restored (+2 HP, +20 pearls) — 50% take 1 HP.', color: '#c084fc' },
+        safe: { label: 'SWIM AROUND', desc: 'Pass by safely. Nothing gained.', color: PAL.good },
+        onRisk: () => {
+          if (Math.random() < 0.5) {
+            this.player.health = Math.min(this.player.stats.maxHealth, this.player.health + 2);
+            this._gainPearls(20, this.W / 2, this.H / 2, false);
+            this.banners.add('REVITALIZED!', PAL.good);
+          } else {
+            this.player.health = Math.max(1, this.player.health - 1);
+            this.banners.add('BATTERED! −1 HP', PAL.danger);
+            this.shake.add(0.4);
+          }
+          return false;
+        },
+        onSafe: () => {},
+      },
+    ];
+
+    const ev = events[Math.floor(Math.random() * events.length)];
+    this.choiceScreen.show(ev.title, ev.subtitle, [ev.risk, ev.safe], (i) => {
+      Sound.tap();
+      const handled = i === 0 ? ev.onRisk() : (ev.onSafe(), false);
+      if (!handled) this._openMap();
+    }, this.time);
+    this.state = 'choice';
   }
 
   // ── Room clear / floor clear / victory ─────────────────────────────────
@@ -223,7 +387,8 @@ export class Game {
 
   _showVictory() {
     this.state = 'victory';
-    addTotalPearls(this.sessionPearls);
+    this._bankedAtEnd = Math.round(this.sessionPearls * 0.5);
+    addTotalPearls(this._bankedAtEnd);
     const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
     const prev = getBestM();
     if (distM > prev) setBestM(distM);
@@ -356,6 +521,14 @@ export class Game {
           this.relicPicker.handleTap(x, y, this.time);
           break;
 
+        case 'run-shop':
+          this.runShop.handleTap(x, y, this.time);
+          break;
+
+        case 'choice':
+          this.choiceScreen.handleTap(x, y, this.time);
+          break;
+
         case 'shop':
           this.shop.handleTap(x, y, this.time);
           break;
@@ -369,6 +542,7 @@ export class Game {
     const move = (x, y) => {
       if (this.state === 'relic-pick') this.relicPicker.handleMove(x, y);
       if (this.state === 'map') this.floorMapScreen.handleMove(x, y, this.mapState);
+      if (this.state === 'choice') this.choiceScreen.handleMove(x, y);
     };
 
     this.canvas.addEventListener('pointerdown', e => { e.preventDefault(); tap(e.clientX, e.clientY); });
@@ -390,7 +564,11 @@ export class Game {
     this.combo = 0; this.comboTimer = 0;
     this.bestComboTier = 1;
     this.announcedBest = false;
+    this._secondWindUsed = false;
+    this._comboWindowBonus = 0;
     this._buildPlayer();
+    // Re-apply held relics' stat effects to the fresh player.
+    for (const r of this.activeRelics) { if (r.apply) r.apply(this); }
     this.obstacles.reset();
     this.pearls.reset();
     this.particles.reset();
@@ -447,11 +625,12 @@ export class Game {
     this.state = 'shop';
     this.timeScale = 1;
     const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
-    addTotalPearls(this.sessionPearls);
+    const banked = Math.round(this.sessionPearls * 0.5);
+    addTotalPearls(banked);
     const prevBest = getBestM();
     const isNewBest = distM > prevBest;
     if (isNewBest) setBestM(distM);
-    this.shop.show(distM, this.sessionPearls, Math.max(distM, prevBest), isNewBest, this.bestComboTier, this.time);
+    this.shop.show(distM, banked, Math.max(distM, prevBest), isNewBest, this.bestComboTier, this.time);
   }
 
   // ── Apply damage helper ─────────────────────────────────────────────────
@@ -474,7 +653,18 @@ export class Game {
     this.combo = 0; this.comboTimer = 0;
     this.particles.emit(this.player.x, this.player.y, { count: 12, color: '#ff5c4a', speed: 3.8, spread: Math.PI * 2, radius: 3.5 });
     this._fireRelicHook('onDamage');
-    if (this.player.health <= 0) this._die();
+    if (this.player.health <= 0) {
+      if (this.hasRelic('second_wind') && !this._secondWindUsed) {
+        this._secondWindUsed = true;
+        this.player.health = 1;
+        this.player.invincibleTimer = Math.max(this.player.invincibleTimer, 1600);
+        this.banners.add('SECOND WIND!', PAL.gold);
+        this.flash.trigger(PAL.gold, 0.35);
+        Sound.milestone();
+        return;
+      }
+      this._die();
+    }
   }
 
   // ── Update ──────────────────────────────────────────────────────────────
@@ -492,6 +682,7 @@ export class Game {
     this.ripples.update(stepRaw);
     this.banners.update(dtRaw);
     this.shop.update(dtRaw);
+    this.runShop.update(dtRaw);
     this.hud.update(stepRaw, this.player);
 
     if (this.state === 'start') {
@@ -499,7 +690,7 @@ export class Game {
       return;
     }
 
-    if (this.state === 'map') {
+    if (this.state === 'map' || this.state === 'run-shop' || this.state === 'choice') {
       this.bg.update(0.3, step, this.time);
       return;
     }
@@ -532,6 +723,10 @@ export class Game {
       this.roomClearTimer -= dtRaw;
       if (this.roomClearTimer <= 0) {
         if (this.currentRoom.type === 'boss') this._floorClear();
+        else if (this._roomReward === 'relic') {
+          this._roomReward = null;
+          this._offerRelics(() => this._openMap());
+        }
         else this._openMap();
       }
       return;
@@ -561,10 +756,10 @@ export class Game {
     this.roomDistPx += worldSpeed * step;
     this.totalMeters += worldSpeed * step;
 
-    // Treasure room: reduce gravity for buoyant floating feel.
+    // Treasure room: buoyant floating feel.
     if (isTreasure) {
       this.player.vy = Math.min(this.player.vy, 3.2);
-      this.player.vy -= 0.07; // gentle upward buoyancy
+      this.player.vy -= 0.07;
     }
 
     this.player.update(dt, step, worldSpeed);
@@ -583,7 +778,7 @@ export class Game {
     if (this.player.y + this.player.r > this.H) {
       this.player.y = this.H - this.player.r;
       this.player.vy = -7.5;
-      this._applyDamage();
+      if (!isTreasure) this._applyDamage();
       if (this.state !== 'playing') return;
     }
 
@@ -601,7 +796,7 @@ export class Game {
     const { count: collected, hasGolden } = this.pearls.collect(this.player, this.time);
     if (collected > 0) {
       this.combo += collected;
-      this.comboTimer = TUNE.comboWindowMs;
+      this.comboTimer = this.comboWindow;
       this.bestComboTier = Math.max(this.bestComboTier, this.comboTier);
       Sound.pearl(this.combo);
       if (hasGolden) Sound.goldenPearl();
@@ -624,6 +819,8 @@ export class Game {
         const canPhase = this.player.isDashing && this.hasRelic('void_passage');
         if (canPhase) continue;
 
+        const smashableRock = hit.kind === 'rock' && this.hasRelic('diamond_tusk');
+
         if (hit.kind === 'spike_wheel' && this.player.isDashing) {
           hit.obj.gone = true;
           Sound.shatter();
@@ -633,16 +830,24 @@ export class Game {
           this.particles.emit(hit.x, hit.y, { count: 18, color: '#a04020', speed: 4.5, spread: Math.PI * 2, radius: 4, shape: 'shard' });
           this._gainPearls(1, hit.x, hit.y, false);
           if (this.hasRelic('thirsty_tusk')) this._gainPearls(2, hit.x, hit.y, false);
-        } else if (hit.kind === 'ice' && this.player.isDashing) {
+        } else if ((hit.kind === 'ice' || smashableRock) && this.player.isDashing) {
           hit.obj.destroy(hit.part);
           Sound.shatter();
           this.hitstop = 42;
           this.shake.add(0.25);
-          this.flash.trigger('#bfe8ff', 0.12);
+          this.flash.trigger(hit.kind === 'ice' ? '#bfe8ff' : '#ff9040', 0.12);
           const iy = hit.part === 'top' ? hit.obj.topH / 2 : (hit.obj.botY + this.H) / 2;
-          this.particles.emit(hit.obj.x + hit.obj.w / 2, iy, { count: 18, color: PAL.ice, speed: 4.5, spread: Math.PI * 2, radius: 5, shape: 'shard' });
+          this.particles.emit(hit.obj.x + hit.obj.w / 2, iy, {
+            count: 18, color: hit.kind === 'ice' ? PAL.ice : PAL.rock,
+            speed: 4.5, spread: Math.PI * 2, radius: 5, shape: 'shard',
+          });
           this._gainPearls(1, hit.obj.x + hit.obj.w / 2, iy, false);
           if (this.hasRelic('thirsty_tusk')) this._gainPearls(3, hit.obj.x + hit.obj.w / 2, iy, false);
+          // Glacier Surf: chain dashes by extending dash on each smash.
+          if (hit.kind === 'ice' && this.hasRelic('glacier_surf')) {
+            this.player.dashTimer += 500;
+            this.player.invincibleTimer = Math.max(this.player.invincibleTimer, this.player.dashTimer + 120);
+          }
         } else if (!this.player.invincible) {
           this._applyDamage(hit.kind === 'laser');
           break;
@@ -652,9 +857,7 @@ export class Game {
 
     // Treasure room: timer-based end + trickle in more pearls.
     if (isTreasure) {
-      const TREASURE_DUR = 20000;
       this._treasureTimer += dtRaw;
-      // Trickle in fresh pearls as others get collected.
       if (Math.random() < 0.015 && this.pearls.items.filter(p => !p.collected).length < 18) {
         this.pearls._spawnAt(
           this.W * (0.55 + Math.random() * 0.35),
@@ -692,7 +895,7 @@ export class Game {
       this.floorMapScreen.draw(ctx, W, H, this.mapState, this.time, this.cycleN);
     } else if (this.state === 'victory') {
       this._drawVictory(ctx, W, H);
-    } else if (this.state !== 'shop') {
+    } else if (this.state !== 'shop' && this.state !== 'run-shop' && this.state !== 'choice') {
       // playing, room-clear, dying, relic-pick
       this.obstacles.draw(ctx, this.time, this.player.dashReady, this._currentBiome);
       this.pearls.draw(ctx, this.time);
@@ -724,19 +927,23 @@ export class Game {
 
     // ── HUD overlays ──
     const inGame = this.state === 'playing' || this.state === 'dying' || this.state === 'room-clear';
-    if (inGame) {
-      const icon = this.currentRoom ? ROOM_ICONS[this.currentRoom.type] : null;
-      const isTreas = this.currentRoom?.type === 'treasure';
-      const roomInfo = this.currentRoom ? {
+    const buildRoomInfo = () => {
+      if (!this.currentRoom) return null;
+      const icon = ROOM_ICONS[this.currentRoom.type];
+      const isTreas = this.currentRoom.type === 'treasure';
+      return {
         floorNum: this.floorIdx + 1,
         roomLabel: icon?.label || this.currentRoom.type.toUpperCase(),
-        roomDistM: isTreas ? Math.ceil(Math.max(0, 20000 - this._treasureTimer) / 1000) : roomDistM,
-        roomLengthM: isTreas ? 20 : (this.currentRoom.lengthM || 0),
+        roomDistM: isTreas ? Math.ceil(Math.max(0, TREASURE_DUR - this._treasureTimer) / 1000) : roomDistM,
+        roomLengthM: isTreas ? TREASURE_DUR / 1000 : (this.currentRoom.lengthM || 0),
         isTreasure: isTreas,
-      } : null;
+      };
+    };
+
+    if (inGame) {
       this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
-        this.combo, Math.max(0, this.comboTimer / TUNE.comboWindowMs),
-        Sound.muted, this.time, this.activeRelics, roomInfo);
+        this.combo, Math.max(0, this.comboTimer / this.comboWindow),
+        Sound.muted, this.time, this.activeRelics, buildRoomInfo());
       this.banners.draw(ctx, W, H);
     } else if (this.state === 'start') {
       this.startScreen.draw(ctx, W, H, this.time);
@@ -745,15 +952,17 @@ export class Game {
       this.hud.drawMute(ctx, W, Sound.muted);
       this.banners.draw(ctx, W, H);
     } else if (this.state === 'relic-pick') {
-      const icon = this.currentRoom ? ROOM_ICONS[this.currentRoom.type] : null;
-      const roomInfo = this.currentRoom ? {
-        floorNum: this.floorIdx + 1,
-        roomLabel: icon?.label || this.currentRoom.type.toUpperCase(),
-        roomDistM, roomLengthM: this.currentRoom.lengthM || 0,
-      } : null;
       this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
-        this.combo, 0, Sound.muted, this.time, this.activeRelics, roomInfo);
+        this.combo, 0, Sound.muted, this.time, this.activeRelics, buildRoomInfo());
       this.relicPicker.draw(ctx, W, H, this.time);
+    } else if (this.state === 'run-shop') {
+      this.runShop.draw(ctx, W, H, this.time, this.sessionPearls);
+      this.hud.drawMute(ctx, W, Sound.muted);
+      this.banners.draw(ctx, W, H);
+    } else if (this.state === 'choice') {
+      this.choiceScreen.draw(ctx, W, H, this.time);
+      this.hud.drawMute(ctx, W, Sound.muted);
+      this.banners.draw(ctx, W, H);
     } else if (this.state === 'shop') {
       this.shop.draw(ctx, W, H, this.time);
       this.hud.drawMute(ctx, W, Sound.muted);
@@ -768,7 +977,6 @@ export class Game {
     ctx.fillStyle = 'rgba(2,8,18,0.88)';
     ctx.fillRect(0, 0, W, H);
 
-    // Stars sparkle
     for (let i = 0; i < 18; i++) {
       const sx = (Math.sin(i * 2.3 + this.time / 800) * 0.5 + 0.5) * W;
       const sy = (Math.cos(i * 1.7 + this.time / 600) * 0.5 + 0.5) * H;
@@ -777,7 +985,6 @@ export class Game {
       ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Title
     ctx.textAlign = 'center';
     ctx.save();
     ctx.shadowBlur = 30; ctx.shadowColor = '#ffd866';
@@ -798,12 +1005,10 @@ export class Game {
       ctx.fillText(`LOOP ${this.cycleN + 1} COMPLETE!`, W / 2, H * 0.3 + 66);
     }
 
-    // Stats
-    const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
     const statsY = H * 0.52;
     const lines = [
-      [`${distM}m`, 'TRAVELED'],
-      [`${this.sessionPearls}`, 'PEARLS COLLECTED'],
+      [`${this.sessionPearls}`, 'PEARLS REMAINING'],
+      [`+${this._bankedAtEnd || 0}`, 'BANKED FOR UPGRADES'],
       [`${this.activeRelics.length}`, 'RELICS HELD'],
     ];
     ctx.font = "13px 'Courier New', monospace";
@@ -814,7 +1019,6 @@ export class Game {
       ctx.fillText(lines[i][1], W / 2, statsY + i * 30 + 14);
     }
 
-    // Continue prompt
     const pulse = 0.6 + Math.sin(this.time / 360) * 0.3;
     ctx.save();
     ctx.globalAlpha = pulse;

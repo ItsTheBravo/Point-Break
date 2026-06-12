@@ -1,13 +1,24 @@
 // Static floor definitions.
 // Layers listed bottom→top (start→boss).
 // connections[layerIdx] = [[fromIdx, toIdx], ...] edges between that layer and the next.
+//
+// Room types:
+//   combat   — obstacle gauntlet (flavour randomised per pattern: pillars/ice/mines/lasers)
+//   elite    — harder combat guarding a guaranteed relic
+//   treasure — calm floating pearl room, relic at the end
+//   shop     — spend run pearls on relics / heals / shields
+//   rest     — choose: heal, +1 max HP, or dash tune-up
+//   event    — risk/reward encounter
+//   boss     — floor boss, relic + descend on kill
 
 export const ROOM_ICONS = {
-  corridor:     { label: 'PASSAGE',  emoji: '◈', color: '#7ab8d4' },
-  ice_gauntlet: { label: 'GAUNTLET', emoji: '❋', color: '#bfe8ff' },
-  hazard:       { label: 'HAZARD',   emoji: '☠', color: '#ff5252' },
-  treasure:     { label: 'TREASURE', emoji: '◆', color: '#ffd866' },
-  boss:         { label: 'BOSS',     emoji: '☯', color: '#ff3b60' },
+  combat:   { label: 'COMBAT',   emoji: '◈', color: '#7ab8d4' },
+  elite:    { label: 'ELITE',    emoji: '!', color: '#ff9540' },
+  treasure: { label: 'TREASURE', emoji: '◆', color: '#ffd866' },
+  shop:     { label: 'SHOP',     emoji: '$', color: '#3df2a6' },
+  rest:     { label: 'REST',     emoji: '+', color: '#ff7ab0' },
+  event:    { label: '???',      emoji: '?', color: '#c084fc' },
+  boss:     { label: 'BOSS',     emoji: '☯', color: '#ff3b60' },
 };
 
 export const FLOORS = [
@@ -17,12 +28,12 @@ export const FLOORS = [
     biomeIdx: 0,
     bossName: 'The Orca',
     baseSpeed: 4.6,
-    baseDifficulty: 0.22,
+    baseDifficulty: 0.25,
     layers: [
-      [ { type: 'corridor',     lengthM: 90 } ],
-      [ { type: 'ice_gauntlet', lengthM: 80 }, { type: 'hazard',   lengthM: 70 } ],
-      [ { type: 'corridor',     lengthM: 85 }, { type: 'treasure',  lengthM: 50 }, { type: 'ice_gauntlet', lengthM: 80 } ],
-      [ { type: 'ice_gauntlet', lengthM: 80 }, { type: 'hazard',   lengthM: 70 } ],
+      [ { type: 'combat', lengthM: 80 } ],
+      [ { type: 'combat', lengthM: 85 }, { type: 'treasure', lengthM: 50 } ],
+      [ { type: 'shop' }, { type: 'combat', lengthM: 85 }, { type: 'combat', lengthM: 80 } ],
+      [ { type: 'rest' }, { type: 'elite', lengthM: 105 } ],
       [ { type: 'boss' } ],
     ],
     connections: [
@@ -37,20 +48,22 @@ export const FLOORS = [
     name: 'THE ABYSS',
     biomeIdx: 1,
     bossName: 'The Angler',
-    baseSpeed: 5.8,
-    baseDifficulty: 0.52,
+    baseSpeed: 5.6,
+    baseDifficulty: 0.5,
     layers: [
-      [ { type: 'corridor',     lengthM: 80 } ],
-      [ { type: 'hazard',       lengthM: 70 }, { type: 'ice_gauntlet', lengthM: 75 }, { type: 'corridor', lengthM: 80 } ],
-      [ { type: 'hazard',       lengthM: 65 }, { type: 'treasure',     lengthM: 50 }, { type: 'ice_gauntlet', lengthM: 75 } ],
-      [ { type: 'ice_gauntlet', lengthM: 75 }, { type: 'hazard',       lengthM: 65 }, { type: 'corridor',     lengthM: 80 } ],
+      [ { type: 'combat', lengthM: 85 } ],
+      [ { type: 'combat', lengthM: 90 }, { type: 'elite', lengthM: 110 }, { type: 'combat', lengthM: 85 } ],
+      [ { type: 'treasure', lengthM: 50 }, { type: 'combat', lengthM: 90 }, { type: 'event' } ],
+      [ { type: 'combat', lengthM: 85 }, { type: 'shop' }, { type: 'combat', lengthM: 90 } ],
+      [ { type: 'rest' }, { type: 'combat', lengthM: 95 } ],
       [ { type: 'boss' } ],
     ],
     connections: [
       [ [0,0],[0,1],[0,2] ],
-      [ [0,0],[0,1],[1,1],[1,2],[2,2] ],
-      [ [0,0],[1,0],[1,1],[2,1],[2,2] ],
-      [ [0,0],[1,0],[2,0] ],
+      [ [0,0],[1,0],[1,1],[1,2],[2,2] ],
+      [ [0,0],[0,1],[1,1],[2,1],[2,2] ],
+      [ [0,0],[1,0],[1,1],[2,1] ],
+      [ [0,0],[1,0] ],
     ],
   },
   {
@@ -58,28 +71,29 @@ export const FLOORS = [
     name: 'VOLCANIC RIFT',
     biomeIdx: 2,
     bossName: 'The Kraken',
-    baseSpeed: 7.5,
-    baseDifficulty: 0.82,
+    baseSpeed: 6.8,
+    baseDifficulty: 0.75,
     layers: [
-      [ { type: 'corridor',     lengthM: 70 } ],
-      [ { type: 'ice_gauntlet', lengthM: 70 }, { type: 'hazard',       lengthM: 60 }, { type: 'corridor',     lengthM: 70 } ],
-      [ { type: 'hazard',       lengthM: 55 }, { type: 'treasure',     lengthM: 45 }, { type: 'hazard',       lengthM: 55 } ],
-      [ { type: 'hazard',       lengthM: 55 }, { type: 'ice_gauntlet', lengthM: 65 }, { type: 'hazard',       lengthM: 55 } ],
-      [ { type: 'hazard',       lengthM: 55 }, { type: 'ice_gauntlet', lengthM: 65 } ],
+      [ { type: 'combat', lengthM: 90 } ],
+      [ { type: 'combat', lengthM: 95 }, { type: 'combat', lengthM: 90 }, { type: 'elite', lengthM: 115 } ],
+      [ { type: 'event' }, { type: 'combat', lengthM: 95 }, { type: 'treasure', lengthM: 50 } ],
+      [ { type: 'combat', lengthM: 90 }, { type: 'shop' }, { type: 'combat', lengthM: 95 } ],
+      [ { type: 'elite', lengthM: 115 }, { type: 'combat', lengthM: 95 } ],
+      [ { type: 'rest' }, { type: 'combat', lengthM: 100 } ],
       [ { type: 'boss' } ],
     ],
     connections: [
       [ [0,0],[0,1],[0,2] ],
-      [ [0,0],[0,1],[1,1],[1,2],[2,2] ],
-      [ [0,0],[1,0],[1,1],[2,1],[2,2] ],
+      [ [0,0],[1,0],[1,1],[1,2],[2,2] ],
+      [ [0,0],[0,1],[1,1],[2,1],[2,2] ],
       [ [0,0],[1,0],[1,1],[2,1] ],
+      [ [0,0],[0,1],[1,1] ],
       [ [0,0],[1,0] ],
     ],
   },
 ];
 
-// Generate a fresh run's map for one floor: a concrete list of reachable
-// (layer, idx) nodes and the connections between them.
+// Generate a fresh run's map for one floor.
 export function buildFloorMap(floorDef) {
   return {
     floor: floorDef,

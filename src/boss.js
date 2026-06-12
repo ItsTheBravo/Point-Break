@@ -104,6 +104,7 @@ class Boss {
       const result = p.check(player);
       if (result === 'boss') {
         this._hit(g);
+        g._fireRelicHook('onReflect', p);
         player.invincibleTimer = Math.max(player.invincibleTimer, 900);
         g.particles.emit(p.x, p.y, { count: 12, color: p.glowColor, speed: 3.5, spread: Math.PI * 2, radius: 3 });
       } else if (result === 'player' && !player.invincible) {
