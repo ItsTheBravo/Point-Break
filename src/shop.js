@@ -1,5 +1,5 @@
 import { PAL } from './constants.js';
-import { UPGRADES, getLevels, upgradeCost, buyUpgrade, getTotalPearls } from './storage.js';
+import { UPGRADES, getLevels, upgradeCost, buyUpgrade, getTotalPearls, getChallengeRating } from './storage.js';
 import { drawPearlIcon } from './hud.js';
 import { Sound } from './audio.js';
 
@@ -198,7 +198,19 @@ export class Shop {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillStyle = '#9cc3e0';
     ctx.fillText(`${this.runM}m swum  ·  best ${this.bestM}m  ·  combo x${this.bestCombo}`, W / 2, y);
-    y += 22;
+    y += 18;
+
+    // Challenge rating indicator — shows players the difficulty bonus their upgrades impose.
+    const cr = getChallengeRating();
+    if (cr > 0) {
+      const pips = Math.round(cr / 0.30 * 5);
+      const filled = '●'.repeat(pips) + '○'.repeat(5 - pips);
+      const pct = Math.round(cr * 100);
+      ctx.font = "11px 'Courier New', monospace";
+      ctx.fillStyle = cr >= 0.20 ? '#ff9540' : cr >= 0.10 ? '#ffd866' : '#9cc3e0';
+      ctx.fillText(`CHALLENGE  ${filled}  +${pct}% harder`, W / 2, y);
+    }
+    y += 16;
 
     // Pearl balance
     ctx.font = "bold 20px 'Courier New', monospace";

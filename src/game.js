@@ -1,5 +1,5 @@
 import { TUNE, PAL, BIOMES } from './constants.js';
-import { buildStats, addTotalPearls, getBestM, setBestM } from './storage.js';
+import { buildStats, addTotalPearls, getBestM, setBestM, getChallengeRating } from './storage.js';
 import { Sound } from './audio.js';
 import { Player } from './player.js';
 import { ObstacleManager } from './obstacles.js';
@@ -116,6 +116,7 @@ export class Game {
     this._secondWindUsed = false;
     this._comboWindowBonus = 0;
     this._playerClass = null;
+    this._challengeRating = 0;
   }
 
   _buildPlayer() {
@@ -137,6 +138,7 @@ export class Game {
     this.bg.startTransition(BIOMES[0], BIOMES[0]);
     this.state = 'class-select';
     this.classSelect.open((cls) => {
+      this._challengeRating = getChallengeRating();
       this._applyClass(cls);
       this.floorIdx = 0;
       this.mapState = buildFloorMap(FLOORS[0]);
@@ -230,9 +232,10 @@ export class Game {
     this._currentBiome = BIOMES[floor.biomeIdx];
     this.bg.startTransition(this._currentBiome, this._currentBiome);
 
-    const diff = room.type === 'elite'
+    const baseDiff = room.type === 'elite'
       ? Math.min(1, floor.baseDifficulty + 0.25)
       : floor.baseDifficulty;
+    const diff = Math.min(1, baseDiff * (1 + this._challengeRating));
     this.obstacles.setRoomMode(room.type, diff);
     this.obstacles.resetForRoom();
     this.pearls.reset();
@@ -795,7 +798,8 @@ export class Game {
     const cycleScale = 1 + this.cycleN * 0.25;
     const adrenalineBoost = (this._adrenalineActive && this.hasRelic('adrenaline_rush')) ? 1.5 : 1;
     this.speed = Math.min(TUNE.maxSpeed,
-      floor.baseSpeed * cycleScale + (this.roomDistPx / 1000) * TUNE.speedRampPer1000px
+      floor.baseSpeed * cycleScale * (1 + this._challengeRating * 0.5)
+        + (this.roomDistPx / 1000) * TUNE.speedRampPer1000px
     ) * adrenalineBoost;
 
     if (this.state === 'room-clear') {

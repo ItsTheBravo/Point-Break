@@ -19,7 +19,7 @@ export const UPGRADES = [
   {
     id: 'max_health', name: 'Thick Blubber', icon: 'heart',
     desc: '+1 max health per level',
-    baseCost: 22, costGrowth: 16, maxLevel: 8,
+    baseCost: 22, costGrowth: 20, maxLevel: 4,
   },
   {
     id: 'dash_cooldown', name: 'Quick Tusk', icon: 'bolt',
@@ -44,7 +44,7 @@ export const UPGRADES = [
   {
     id: 'shield', name: 'Bubble Shield', icon: 'shield',
     desc: 'Start each run with a free hit',
-    baseCost: 60, costGrowth: 65, maxLevel: 3,
+    baseCost: 60, costGrowth: 65, maxLevel: 2,
   },
 ];
 
@@ -92,3 +92,14 @@ export function getTotalPearls() { return Storage.get('total_pearls', 0); }
 export function addTotalPearls(n) { Storage.set('total_pearls', getTotalPearls() + n); }
 export function getBestM() { return Storage.get('best_m', 0); }
 export function setBestM(m) { Storage.set('best_m', m); }
+
+// Sum of all bought upgrade levels. Used to scale challenge rating.
+export function getTotalUpgradeLevels() {
+  return Object.values(getLevels()).reduce((s, v) => s + v, 0);
+}
+
+// 0–1 scale: 1% harder per upgrade level purchased, capped at 30%.
+// Keeps endgame challenging even when the shop is fully maxed.
+export function getChallengeRating() {
+  return Math.min(0.30, getTotalUpgradeLevels() * 0.011);
+}
