@@ -1,5 +1,6 @@
 import { PAL } from './constants.js';
 import { drawIcon } from './relic-picker.js';
+import { classLock } from './unlocks.js';
 
 function roundRect(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -106,6 +107,7 @@ export class ClassSelect {
     for (let i = 0; i < this._cards.length; i++) {
       const c = this._cards[i];
       if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) {
+        if (classLock(CLASSES[i].id)) { this._selected = -1; return; }
         if (this._selected === i) {
           if (this.onPick) this.onPick(CLASSES[i]);
         } else {
@@ -120,6 +122,7 @@ export class ClassSelect {
   // Keyboard shortcut: pick class by 1-5 index (first press selects, second confirms).
   handleKey(idx) {
     if (idx < 0 || idx >= CLASSES.length) return;
+    if (classLock(CLASSES[idx].id)) return;
     if (this._selected === idx) {
       if (this.onPick) this.onPick(CLASSES[idx]);
     } else {
@@ -162,6 +165,7 @@ export class ClassSelect {
 
     for (let i = 0; i < n; i++) {
       const cls = CLASSES[i];
+      const lock = classLock(cls.id);
       const delay = i * 60;
       const prog = Math.min(1, Math.max(0, (elapsed - delay) / 280));
       const ease = 1 - Math.pow(1 - prog, 3);
@@ -170,9 +174,9 @@ export class ClassSelect {
 
       this._cards.push({ x: cx, y: cy, w: cardW, h: cardH });
 
-      const selected = this._selected === i;
-      const hover = this._hover === i || selected;
-      const cardAlpha = fadeIn * ease;
+      const selected = !lock && this._selected === i;
+      const hover = !lock && (this._hover === i || selected);
+      const cardAlpha = fadeIn * ease * (lock ? 0.55 : 1);
 
       ctx.save();
       ctx.globalAlpha = cardAlpha;
@@ -198,14 +202,28 @@ export class ClassSelect {
       ctx.save();
       ctx.shadowBlur = hover ? 22 : 10;
       ctx.shadowColor = cls.color;
-      drawIcon(ctx, cls.icon, iconX, iconY, hover ? 17 : 14, hover ? '#ffffff' : cls.color);
+      drawIcon(ctx, cls.icon, iconX, iconY, hover ? 17 : 14,
+        lock ? 'rgba(110,130,155,0.8)' : hover ? '#ffffff' : cls.color);
       ctx.restore();
 
       // Name
       ctx.textAlign = 'left';
       ctx.font = "bold 15px 'Courier New', monospace";
-      ctx.fillStyle = hover ? '#ffffff' : cls.color;
+      ctx.fillStyle = lock ? 'rgba(130,150,175,0.85)' : hover ? '#ffffff' : cls.color;
       ctx.fillText(cls.name, cx + 74, cy + cardH * 0.35);
+
+      // Locked: show the unlock requirement instead of stats.
+      if (lock) {
+        ctx.font = "10px 'Courier New', monospace";
+        ctx.fillStyle = 'rgba(150,170,195,0.8)';
+        ctx.fillText('LOCKED — ' + lock.hint, cx + 74, cy + cardH * 0.35 + 15);
+        ctx.textAlign = 'right';
+        ctx.font = "bold 13px 'Courier New', monospace";
+        ctx.fillStyle = 'rgba(150,170,195,0.7)';
+        ctx.fillText('🔒', cx + cardW - 14, cy + cardH / 2 + 5);
+        ctx.restore();
+        continue;
+      }
 
       // Show desc when selected, tagline otherwise
       if (selected) {

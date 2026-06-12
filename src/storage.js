@@ -92,3 +92,22 @@ export function getTotalPearls() { return Storage.get('total_pearls', 0); }
 export function addTotalPearls(n) { Storage.set('total_pearls', getTotalPearls() + n); }
 export function getBestM() { return Storage.get('best_m', 0); }
 export function setBestM(m) { Storage.set('best_m', m); }
+
+// ── Lifetime stats (feed the unlock system in unlocks.js) ──
+
+export function getStats() { return Storage.get('life_stats', {}); }
+
+export function bumpStat(key, n = 1) {
+  const s = getStats();
+  s[key] = (s[key] || 0) + n;
+  Storage.set('life_stats', s);
+  return s[key];
+}
+
+export function maxStat(key, v) {
+  const s = getStats();
+  if (v > (s[key] || 0)) {
+    s[key] = v;
+    Storage.set('life_stats', s);
+  }
+}

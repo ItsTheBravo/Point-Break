@@ -1,4 +1,5 @@
 import { PAL } from './constants.js';
+import { relicLocked } from './unlocks.js';
 
 // Each relic has hooks fired by game.js at the right moments.
 // Hooks receive the game object and can mutate its state directly.
@@ -240,12 +241,130 @@ export const RELICS = {
     // Effect handled in game._applyDamage via hasRelic check.
   },
 
+  // ── Synergy & unlockable relics ──
+
+  blood_pearl: {
+    name: 'Blood Pearl',
+    rarity: 'uncommon',
+    desc: 'Taking a hit bursts 6 pearls out of you.',
+    icon: 'drop',
+    onDamage(g) {
+      for (let i = 0; i < 6; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 50 + Math.random() * 60;
+        g.pearls._spawnAt(g.player.x + Math.cos(a) * r, g.player.y + Math.sin(a) * r);
+      }
+    },
+  },
+
+  siren_song: {
+    name: 'Siren Song',
+    rarity: 'uncommon',
+    desc: 'While dashing, your pearl magnet reaches much further.',
+    icon: 'wave',
+    // Effect handled in game pearl update via hasRelic check.
+  },
+
+  current_rider: {
+    name: 'Current Rider',
+    rarity: 'rare',
+    desc: 'Your combo no longer resets when you take damage.',
+    icon: 'lightning',
+    // Effect handled in game._applyDamage via hasRelic check.
+  },
+
+  storm_caller: {
+    name: 'Storm Caller',
+    rarity: 'rare',
+    desc: 'Every 10-combo milestone grants 1s of invincibility.',
+    icon: 'bolt',
+    onComboMilestone(g) {
+      g.player.invincibleTimer = Math.max(g.player.invincibleTimer, 1000);
+      g.flash.trigger(PAL.cyan, 0.18);
+      g.floaters.add(g.player.x, g.player.y - 55, 'STORM!', { color: PAL.cyan, size: 16 });
+    },
+  },
+
+  moon_shell: {
+    name: 'Moon Shell',
+    rarity: 'rare',
+    desc: 'Every 50 pearls collected grants +1 bubble shield.',
+    icon: 'ring',
+    onPearl(g, count) {
+      g._moonShellCounter = (g._moonShellCounter || 0) + count;
+      while (g._moonShellCounter >= 50) {
+        g._moonShellCounter -= 50;
+        g.player.shield++;
+        g.floaters.add(g.player.x, g.player.y - 50, '+1 SHIELD', { color: '#78dcff', size: 15 });
+        g.Sound.milestone();
+      }
+    },
+  },
+
+  tusk_amp: {
+    name: 'Tusk Amplifier',
+    rarity: 'rare',
+    desc: 'Reflecting a boss projectile restores 1 HP.',
+    icon: 'heart',
+    onReflect(g) {
+      if (g.player.health < g.player.stats.maxHealth) {
+        g.player.health++;
+        g.floaters.add(g.player.x, g.player.y - 50, '+1 HP', { color: '#ff7ab0', size: 15 });
+      }
+    },
+  },
+
+  pressure_pearl: {
+    name: 'Pressure Pearl',
+    rarity: 'uncommon',
+    desc: 'At 2 HP or less, all pearls are worth double.',
+    icon: 'gem',
+    // Effect handled in game._gainPearls via hasRelic check.
+  },
+
+  glass_tusk: {
+    name: 'Glass Tusk',
+    rarity: 'rare',
+    desc: 'Dash cooldown halved… but −2 max HP. Live dangerously.',
+    icon: 'bolt',
+    apply(g) {
+      g.player.stats.dashCooldown *= 0.5;
+      g.player.stats.maxHealth = Math.max(1, g.player.stats.maxHealth - 2);
+      g.player.health = Math.min(g.player.health, g.player.stats.maxHealth);
+    },
+  },
+
+  king_tide: {
+    name: 'King Tide',
+    rarity: 'legendary',
+    desc: 'All pearls count one combo tier higher.',
+    icon: 'star',
+    // Effect handled in game.comboTier getter via hasRelic check.
+  },
+
+  barnacle_crown: {
+    name: 'Barnacle Crown',
+    rarity: 'legendary',
+    desc: 'Each floor starts with +1 shield per 4 relics you hold.',
+    icon: 'ring',
+    onFloorStart(g) {
+      const n = Math.floor(g.activeRelics.length / 4);
+      if (n > 0) {
+        g.player.shield += n;
+        g.floaters.add(g.player.x, g.player.y - 50, `+${n} SHIELD`, { color: '#78dcff', size: 15 });
+      }
+    },
+  },
+
 };
+
+// Stamp ids onto relic objects so the unlock system can reference them.
+for (const [id, r] of Object.entries(RELICS)) r.id = id;
 
 export const RELIC_LIST = Object.values(RELICS);
 
 export function pickRelicChoices(held, n = 3) {
-  const available = RELIC_LIST.filter(r => !held.includes(r));
+  const available = RELIC_LIST.filter(r => !held.includes(r) && !relicLocked(r.id));
   const shuffled = available.slice().sort(() => Math.random() - 0.5);
   // Weight toward higher rarity earlier.
   return shuffled.slice(0, Math.min(n, shuffled.length));

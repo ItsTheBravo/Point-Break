@@ -99,12 +99,13 @@ export class Shop {
     this._pulse = {};
   }
 
-  show(runM, runPearls, bestM, isNewBest, bestCombo, now) {
+  show(runM, runPearls, bestM, isNewBest, bestCombo, now, unlocks = []) {
     this.runM = runM;
     this.runPearls = runPearls;
     this.bestM = bestM;
     this.isNewBest = isNewBest;
     this.bestCombo = bestCombo;
+    this.unlocks = unlocks;
     this.message = '';
     this.messageTimer = 0;
     this.openedAt = now;
@@ -198,7 +199,19 @@ export class Shop {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillStyle = '#9cc3e0';
     ctx.fillText(`${this.runM}m swum  ·  best ${this.bestM}m  ·  combo x${this.bestCombo}`, W / 2, y);
-    y += 22;
+    y += 18;
+
+    // Achievement unlocks earned this run.
+    if (this.unlocks && this.unlocks.length > 0) {
+      const flash = 0.75 + Math.sin(time / 180) * 0.25;
+      ctx.font = "bold 12px 'Courier New', monospace";
+      ctx.fillStyle = `rgba(255,216,102,${flash})`;
+      for (const u of this.unlocks.slice(0, 3)) {
+        ctx.fillText(`★ UNLOCKED: ${u.name}`, W / 2, y);
+        y += 15;
+      }
+    }
+    y += 4;
 
     // Pearl balance
     ctx.font = "bold 20px 'Courier New', monospace";

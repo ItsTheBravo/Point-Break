@@ -1,5 +1,6 @@
 import { TUNE, PAL, BIOMES } from './constants.js';
-import { buildStats, addTotalPearls, getBestM, setBestM } from './storage.js';
+import { buildStats, addTotalPearls, getBestM, setBestM, bumpStat, maxStat } from './storage.js';
+import { checkNewUnlocks } from './unlocks.js';
 import { Sound } from './audio.js';
 import { Player } from './player.js';
 import { ObstacleManager } from './obstacles.js';
@@ -116,6 +117,8 @@ export class Game {
     this._secondWindUsed = false;
     this._comboWindowBonus = 0;
     this._playerClass = null;
+    this._moonShellCounter = 0;
+    this._runMaxCombo = 0;
   }
 
   _buildPlayer() {
@@ -137,6 +140,7 @@ export class Game {
     this.bg.startTransition(BIOMES[0], BIOMES[0]);
     this.state = 'class-select';
     this.classSelect.open((cls) => {
+      bumpStat('runs');
       this._applyClass(cls);
       this.floorIdx = 0;
       this.mapState = buildFloorMap(FLOORS[0]);
@@ -201,7 +205,8 @@ export class Game {
   // ── Room entry dispatch ─────────────────────────────────────────────────
 
   _enterRoom(layer, idx) {
-    const floor = FLOORS[this.floorIdx];
+    // Rooms live on the generated map, not the static floor config.
+    const floor = this.mapState.floor;
     const room = floor.layers[layer][idx];
     advanceMap(this.mapState, layer, idx);
     this.currentRoom = room;
@@ -290,6 +295,7 @@ export class Game {
       this.sessionPearls -= item.price;
       if (item.kind === 'relic') {
         this.activeRelics.push(item.relic);
+        maxStat('mostRelics', this.activeRelics.length);
         if (item.relic.apply) item.relic.apply(this);
         this.banners.add(`${item.relic.name}!`, PAL.gold);
       } else if (item.kind === 'heal') {
@@ -439,6 +445,11 @@ export class Game {
     this.state = 'victory';
     this._bankedAtEnd = Math.round(this.sessionPearls * 0.5);
     addTotalPearls(this._bankedAtEnd);
+    bumpStat('wins');
+    bumpStat('banked', this._bankedAtEnd);
+    maxStat('bestCombo', this._runMaxCombo || 0);
+    const freshUnlocks = checkNewUnlocks();
+    for (const u of freshUnlocks) this.banners.add(`UNLOCKED: ${u.name}`, PAL.gold);
     const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
     const prev = getBestM();
     if (distM > prev) setBestM(distM);
@@ -473,6 +484,7 @@ export class Game {
     Sound.relicOffer();
     this.relicPicker.show(choices, (chosen) => {
       this.activeRelics.push(chosen);
+      maxStat('mostRelics', this.activeRelics.length);
       if (chosen.apply) chosen.apply(this);
       Sound.relicPick();
       this.flash.trigger(PAL.gold, 0.2);
@@ -662,14 +674,17 @@ export class Game {
   // ── Combo / pearls ──────────────────────────────────────────────────────
 
   get comboTier() {
-    if (this.combo >= TUNE.comboTier3) return 3;
-    if (this.combo >= TUNE.comboTier2) return 2;
-    return 1;
+    let t = 1;
+    if (this.combo >= TUNE.comboTier3) t = 3;
+    else if (this.combo >= TUNE.comboTier2) t = 2;
+    if (this.hasRelic('king_tide')) t = Math.min(3, t + 1);
+    return t;
   }
 
   _gainPearls(n, x, y, viaCombo) {
     const tier = viaCombo ? this.comboTier : 1;
-    const gain = Math.max(1, Math.round(n * tier * this.player.stats.pearlValue));
+    const pressure = (this.hasRelic('pressure_pearl') && this.player.health <= 2) ? 2 : 1;
+    const gain = Math.max(1, Math.round(n * tier * pressure * this.player.stats.pearlValue));
     this.sessionPearls += gain;
     const label = gain > 1 ? `+${gain}` : '+1';
     const color = tier === 3 ? '#ff7ad9' : tier === 2 ? PAL.gold : PAL.pearl;
@@ -701,10 +716,13 @@ export class Game {
     const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
     const banked = Math.round(this.sessionPearls * 0.5);
     addTotalPearls(banked);
+    bumpStat('banked', banked);
+    maxStat('bestCombo', this._runMaxCombo || 0);
     const prevBest = getBestM();
     const isNewBest = distM > prevBest;
     if (isNewBest) setBestM(distM);
-    this.shop.show(distM, banked, Math.max(distM, prevBest), isNewBest, this.bestComboTier, this.time);
+    const freshUnlocks = checkNewUnlocks();
+    this.shop.show(distM, banked, Math.max(distM, prevBest), isNewBest, this.bestComboTier, this.time, freshUnlocks);
   }
 
   // ── Apply damage helper ─────────────────────────────────────────────────
@@ -721,10 +739,11 @@ export class Game {
       return;
     }
     if (isLaser) Sound.laser(); else Sound.hurt();
+    bumpStat('hits');
     this.hitstop = 75;
     this.shake.add(0.55);
     this.flash.trigger(isLaser ? '#ff4060' : '#ff3b30', 0.3);
-    this.combo = 0; this.comboTimer = 0;
+    if (!this.hasRelic('current_rider')) { this.combo = 0; this.comboTimer = 0; }
     this.particles.emit(this.player.x, this.player.y, { count: 12, color: '#ff5c4a', speed: 3.8, spread: Math.PI * 2, radius: 3.5 });
     this._fireRelicHook('onDamage');
     if (this.player.health <= 0) {
@@ -824,9 +843,10 @@ export class Game {
 
     this.bg.update(worldSpeed, step, this.time);
     this.obstacles.update(worldSpeed, step, dt, this.time, this.roomDistPx, biomeId);
+    const sirenBonus = (this.hasRelic('siren_song') && this.player.isDashing) ? 200 : 0;
     this.pearls.update(worldSpeed, step, this.time,
       this.state === 'playing' ? this.player : null,
-      this.player.stats.magnetRadius);
+      this.player.stats.magnetRadius + sirenBonus);
     this.particles.update(step, worldSpeed);
     this.floaters.update(dt, worldSpeed, step);
 
@@ -873,6 +893,7 @@ export class Game {
       this.boss.update(dt, step, this.player, this);
       if (this.boss.defeated && !this._bossDefeatedHandled) {
         this._bossDefeatedHandled = true;
+        bumpStat(`boss${this.floorIdx + 1}`);
         this.banners.add(`${FLOORS[this.floorIdx].bossName} DEFEATED!`, '#ff3b60');
         setTimeout(() => this._roomClear(), 1800);
       }
@@ -883,6 +904,7 @@ export class Game {
     if (collected > 0) {
       this.combo += collected;
       this.comboTimer = this.comboWindow;
+      this._runMaxCombo = Math.max(this._runMaxCombo || 0, this.combo);
       this.bestComboTier = Math.max(this.bestComboTier, this.comboTier);
       Sound.pearl(this.combo);
       if (hasGolden) Sound.goldenPearl();
