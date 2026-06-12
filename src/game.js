@@ -35,6 +35,10 @@ export class Game {
     this.lastTs = 0;
     this.hitstop = 0;
     this.timeScale = 1;
+    this.paused = false;
+    this._zoom = 1;
+    this._bossIntro = 0;
+    this._roomStartPearls = 0;
 
     this.bg = new Background(this.W, this.H);
     this.hud = new HUD();
@@ -182,6 +186,7 @@ export class Game {
 
     const cycleScale = 1 + this.cycleN * 0.25;
     this.speed = floor.baseSpeed * cycleScale;
+    this._roomStartPearls = this.sessionPearls;
 
     this._currentBiome = BIOMES[floor.biomeIdx];
     this.bg.startTransition(this._currentBiome, this._currentBiome);
@@ -196,6 +201,7 @@ export class Game {
     if (room.type === 'boss') {
       this.boss = createBoss(floor.bossName, this.W, this.H);
       this._bossDefeatedHandled = false;
+      this._bossIntro = 2200;
     } else {
       this.boss = null;
       this._bossDefeatedHandled = false;
@@ -366,7 +372,8 @@ export class Game {
     Sound.milestone();
     this.shake.add(0.4);
     this.flash.trigger(PAL.good, 0.22);
-    this.banners.add('CLEAR!', PAL.good);
+    const earned = this.sessionPearls - this._roomStartPearls;
+    this.banners.add(earned > 0 ? `CLEAR!  +${earned} PEARLS` : 'CLEAR!', PAL.good);
     this.particles.emit(this.W / 2, this.H / 2, {
       count: 30, color: PAL.pearl, speed: 3.8, spread: Math.PI * 2, radius: 3.5,
     });
@@ -476,6 +483,17 @@ export class Game {
         return;
       }
 
+      if (this.state === 'playing' && this.hud.inPause(x, y)) {
+        this.paused = !this.paused;
+        Sound.tap();
+        return;
+      }
+      if (this.paused) {
+        this.paused = false;
+        Sound.tap();
+        return;
+      }
+
       switch (this.state) {
         case 'start':
           Sound.tap();
@@ -550,6 +568,7 @@ export class Game {
 
     window.addEventListener('keydown', e => {
       if (e.repeat) return;
+      if (e.code === 'KeyP' && this.state === 'playing') { this.paused = !this.paused; return; }
       if (['Space', 'ArrowUp', 'KeyW'].includes(e.code)) tap(this.W * 0.75, this.H / 2);
       else if (['ShiftLeft', 'KeyX', 'KeyA'].includes(e.code)) tap(this.W * 0.25, this.H / 2);
     });
@@ -671,6 +690,7 @@ export class Game {
 
   _update(dtRaw) {
     this.time += dtRaw;
+    if (this.paused && this.state === 'playing') return;
     if (this.hitstop > 0) { this.hitstop -= dtRaw; return; }
 
     const dt = dtRaw * this.timeScale;
@@ -707,6 +727,10 @@ export class Game {
     }
 
     // ── playing, room-clear, dying ──
+    // Dash camera punch (decays whenever not dashing, including death).
+    const zoomTarget = (this.state === 'playing' && this.player.isDashing) ? 1.05 : 1;
+    this._zoom += (zoomTarget - this._zoom) * 0.12 * stepRaw;
+
     const floor = FLOORS[this.floorIdx] || FLOORS[0];
     const cycleScale = 1 + this.cycleN * 0.25;
     const adrenalineBoost = (this._adrenalineActive && this.hasRelic('adrenaline_rush')) ? 1.5 : 1;
@@ -755,6 +779,8 @@ export class Game {
     // ── Playing only ──
     this.roomDistPx += worldSpeed * step;
     this.totalMeters += worldSpeed * step;
+
+    if (this._bossIntro > 0) this._bossIntro -= dtRaw;
 
     // Treasure room: buoyant floating feel.
     if (isTreasure) {
@@ -886,13 +912,24 @@ export class Game {
     ctx.save();
     const off = this.shake.offset();
     ctx.translate(off.x, off.y);
+    if (Math.abs(this._zoom - 1) > 0.002) {
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(this._zoom, this._zoom);
+      ctx.translate(-W / 2, -H / 2);
+    }
 
     this.bg.draw(ctx, this.time, totalDistM);
 
     if (this.state === 'start') {
       // nothing extra behind start screen
     } else if (this.state === 'map') {
-      this.floorMapScreen.draw(ctx, W, H, this.mapState, this.time, this.cycleN);
+      this.floorMapScreen.draw(ctx, W, H, this.mapState, this.time, this.cycleN, {
+        health: this.player.health,
+        maxHealth: this.player.stats.maxHealth,
+        shield: this.player.shield,
+        pearls: this.sessionPearls,
+        relics: this.activeRelics.length,
+      });
     } else if (this.state === 'victory') {
       this._drawVictory(ctx, W, H);
     } else if (this.state !== 'shop' && this.state !== 'run-shop' && this.state !== 'choice') {
@@ -912,6 +949,50 @@ export class Game {
         ctx.strokeStyle = PAL.narDash; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.ellipse(0, 0, 25, 14, 0, 0, Math.PI * 2); ctx.stroke();
         ctx.restore();
+      }
+
+      // Speed lines while dashing.
+      if (this.player.isDashing && this.state === 'playing') {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(125,252,255,0.2)';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        for (let i = 0; i < 9; i++) {
+          const len = 90 + (i % 3) * 70;
+          const lx = W - ((this.time * (1.1 + (i % 5) * 0.35) + i * 173) % (W + len));
+          const ly = (i * 97 + 40) % H;
+          ctx.beginPath();
+          ctx.moveTo(lx, ly);
+          ctx.lineTo(lx + len, ly);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Edge warnings for incoming off-screen hazards.
+      if (this.state === 'playing' && !this.boss) {
+        for (const o of this.obstacles.items) {
+          if (o.x <= W + 10 || o.x > W + 700) continue;
+          let wy = null, wc = null;
+          if (o.kind === 'mine') { wy = o.y; wc = '#ff5252'; }
+          else if (o.kind === 'spike_wheel') { wy = o.y; wc = '#ff9540'; }
+          else if (o.kind === 'laser') { wy = (o.y1 + o.y2) / 2; wc = '#ff4060'; }
+          if (wy === null) continue;
+          const pulse = 0.55 + Math.sin(this.time / 140) * 0.35;
+          ctx.save();
+          ctx.globalAlpha = pulse;
+          ctx.fillStyle = wc;
+          ctx.beginPath();
+          ctx.moveTo(W - 6, wy);
+          ctx.lineTo(W - 20, wy - 9);
+          ctx.lineTo(W - 20, wy + 9);
+          ctx.closePath();
+          ctx.fill();
+          ctx.font = "bold 12px 'Courier New', monospace";
+          ctx.textAlign = 'center';
+          ctx.fillText('!', W - 28, wy + 4);
+          ctx.restore();
+        }
       }
 
       const showPlayer = this.state === 'playing' || this.state === 'room-clear' || this.state === 'dying';
@@ -944,7 +1025,49 @@ export class Game {
       this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
         this.combo, Math.max(0, this.comboTimer / this.comboWindow),
         Sound.muted, this.time, this.activeRelics, buildRoomInfo());
+      this.hud.drawPause(ctx, W, this.paused);
       this.banners.draw(ctx, W, H);
+
+      // Boss intro title card.
+      if (this._bossIntro > 0 && this.boss) {
+        const t = 1 - this._bossIntro / 2200;
+        const a = Math.min(Math.min(1, t * 5), Math.min(1, (1 - t) * 3.2));
+        const scale = 1 + Math.max(0, 1 - t * 3.5) * 0.5;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, a);
+        ctx.translate(W / 2, H * 0.3);
+        ctx.scale(scale, scale);
+        ctx.textAlign = 'center';
+        ctx.shadowBlur = 26; ctx.shadowColor = '#ff3b60';
+        ctx.font = "bold 36px 'Courier New', monospace";
+        ctx.strokeStyle = 'rgba(0,0,0,0.75)'; ctx.lineWidth = 6;
+        const bossName = FLOORS[this.floorIdx].bossName.toUpperCase();
+        ctx.strokeText(bossName, 0, 0);
+        ctx.fillStyle = '#ff3b60';
+        ctx.fillText(bossName, 0, 0);
+        ctx.shadowBlur = 0;
+        ctx.font = "bold 12px 'Courier New', monospace";
+        ctx.fillStyle = PAL.cyan;
+        ctx.fillText('DASH ITS PROJECTILES TO REFLECT THEM', 0, 28);
+        ctx.restore();
+      }
+
+      // Pause overlay.
+      if (this.paused) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(1,5,12,0.72)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = 'center';
+        ctx.font = "bold 32px 'Courier New', monospace";
+        ctx.fillStyle = '#e8f4f8';
+        ctx.fillText('PAUSED', W / 2, H / 2 - 8);
+        const pulse = 0.55 + Math.sin(this.time / 350) * 0.3;
+        ctx.globalAlpha = pulse;
+        ctx.font = "bold 13px 'Courier New', monospace";
+        ctx.fillStyle = '#9cc3e0';
+        ctx.fillText('TAP TO RESUME', W / 2, H / 2 + 22);
+        ctx.restore();
+      }
     } else if (this.state === 'start') {
       this.startScreen.draw(ctx, W, H, this.time);
       this.hud.drawMute(ctx, W, Sound.muted);

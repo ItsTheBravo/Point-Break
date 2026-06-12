@@ -39,6 +39,7 @@ export class HUD {
     this.hintAlpha = 1;
     this.swims = 0;
     this.muteRect = null;
+    this.pauseRect = null;
     this._lowHealthPulse = 0;
   }
 
@@ -98,6 +99,15 @@ export class HUD {
       ctx.font = "bold 10px 'Courier New', monospace";
       ctx.fillStyle = 'rgba(140,185,220,0.8)';
       ctx.fillText(`FLOOR ${roomInfo.floorNum}  ·  ${roomInfo.roomLabel}`, W / 2, pad + 38);
+      // Room progress bar.
+      if (roomInfo.roomLengthM > 0) {
+        const frac = Math.max(0, Math.min(1, roomInfo.roomDistM / roomInfo.roomLengthM));
+        const barW = 130, barX = (W - barW) / 2, barY = pad + 45;
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        roundRect(ctx, barX, barY, barW, 5, 2.5); ctx.fill();
+        ctx.fillStyle = roomInfo.isTreasure ? '#ffd866' : PAL.cyan;
+        roundRect(ctx, barX, barY, barW * frac, 5, 2.5); ctx.fill();
+      }
     } else {
       ctx.font = "bold 22px 'Courier New', monospace";
       ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4;
@@ -242,6 +252,31 @@ export class HUD {
 
   inMute(x, y) {
     const r = this.muteRect;
+    return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  drawPause(ctx, W, paused) {
+    const s = 32, x = W - s - 10, y = 100;
+    this.pauseRect = { x: x - 6, y: y - 6, w: s + 12, h: s + 12 };
+    ctx.save();
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = PAL.hudBg;
+    roundRect(ctx, x, y, s, s, 8); ctx.fill();
+    ctx.fillStyle = '#cfe8ff';
+    if (paused) {
+      // Play triangle (tap to resume).
+      ctx.beginPath();
+      ctx.moveTo(x + 11, y + 8); ctx.lineTo(x + 25, y + 16); ctx.lineTo(x + 11, y + 24);
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillRect(x + 10, y + 8, 4.5, 16);
+      ctx.fillRect(x + 18, y + 8, 4.5, 16);
+    }
+    ctx.restore();
+  }
+
+  inPause(x, y) {
+    const r = this.pauseRect;
     return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
 }

@@ -1,5 +1,6 @@
 import { ROOM_ICONS, availableNext } from './floor-data.js';
 import { PAL } from './constants.js';
+import { drawPearlIcon } from './hud.js';
 
 const NODE_R = 30;
 const NODE_BOSS_R = 38;
@@ -77,7 +78,7 @@ export class FloorMapScreen {
     return null;
   }
 
-  draw(ctx, W, H, mapState, time, cycleN) {
+  draw(ctx, W, H, mapState, time, cycleN, status = null) {
     const { floor } = mapState;
     const elapsed = time - this._openTime;
     const fadeIn = Math.min(1, elapsed / 350);
@@ -213,6 +214,27 @@ export class FloorMapScreen {
 
         ctx.restore();
       }
+    }
+
+    // ── Player status strip ──
+    if (status) {
+      ctx.globalAlpha = fadeIn;
+      const sy = H - 76;
+      ctx.font = "bold 14px 'Courier New', monospace";
+      // HP, left segment.
+      ctx.textAlign = 'center';
+      ctx.fillStyle = PAL.danger;
+      const hpText = `♥ ${status.health}/${status.maxHealth}` +
+        (status.shield > 0 ? ` +${status.shield}` : '');
+      ctx.fillText(hpText, W / 2 - 105, sy);
+      // Pearls, centre segment.
+      ctx.fillStyle = PAL.pearl;
+      const pText = `${status.pearls}`;
+      drawPearlIcon(ctx, W / 2 - ctx.measureText(pText).width / 2 - 13, sy - 5, 8);
+      ctx.fillText(pText, W / 2 + 3, sy);
+      // Relics, right segment.
+      ctx.fillStyle = PAL.cyan;
+      ctx.fillText(`✦ ${status.relics}`, W / 2 + 105, sy);
     }
 
     // ── Instruction ──
