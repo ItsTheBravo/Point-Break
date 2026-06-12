@@ -48,8 +48,8 @@ export const FLOORS = [
     name: 'THE ABYSS',
     biomeIdx: 1,
     bossName: 'The Angler',
-    baseSpeed: 5.6,
-    baseDifficulty: 0.5,
+    baseSpeed: 4.9,
+    baseDifficulty: 0.36,
     layers: [
       [ { type: 'combat', lengthM: 85 } ],
       [ { type: 'combat', lengthM: 90 }, { type: 'elite', lengthM: 110 }, { type: 'combat', lengthM: 85 } ],
@@ -71,8 +71,8 @@ export const FLOORS = [
     name: 'VOLCANIC RIFT',
     biomeIdx: 2,
     bossName: 'The Kraken',
-    baseSpeed: 6.8,
-    baseDifficulty: 0.75,
+    baseSpeed: 6.2,
+    baseDifficulty: 0.62,
     layers: [
       [ { type: 'combat', lengthM: 90 } ],
       [ { type: 'combat', lengthM: 95 }, { type: 'combat', lengthM: 90 }, { type: 'elite', lengthM: 115 } ],

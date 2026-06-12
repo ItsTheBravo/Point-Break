@@ -17,6 +17,7 @@ import { FloorMapScreen } from './floor-map.js';
 import { createBoss } from './boss.js';
 import { ChoiceScreen } from './choice-screen.js';
 import { RunShop } from './run-shop.js';
+import { ClassSelect, CLASSES } from './class-select.js';
 
 const TREASURE_DUR = 20000;
 
@@ -28,7 +29,7 @@ export class Game {
     this._resize();
     window.addEventListener('resize', () => this._resize());
 
-    // States: start | map | playing | room-clear | relic-pick | run-shop |
+    // States: start | class-select | map | playing | room-clear | relic-pick | run-shop |
     //         choice | victory | dying | shop
     this.state = 'start';
     this.time = 0;
@@ -56,6 +57,7 @@ export class Game {
     this.floorMapScreen = new FloorMapScreen();
     this.choiceScreen = new ChoiceScreen();
     this.runShop = new RunShop();
+    this.classSelect = new ClassSelect();
 
     this.Sound = Sound;
 
@@ -113,6 +115,7 @@ export class Game {
     this._phantomGhosts = [];
     this._secondWindUsed = false;
     this._comboWindowBonus = 0;
+    this._playerClass = null;
   }
 
   _buildPlayer() {
@@ -132,10 +135,44 @@ export class Game {
     this.floaters.items = [];
     this._currentBiome = BIOMES[0];
     this.bg.startTransition(BIOMES[0], BIOMES[0]);
-    this.floorIdx = 0;
-    this.mapState = buildFloorMap(FLOORS[0]);
-    this.state = 'map';
-    this.floorMapScreen.open(this.time);
+    this.state = 'class-select';
+    this.classSelect.open((cls) => {
+      this._applyClass(cls);
+      this.floorIdx = 0;
+      this.mapState = buildFloorMap(FLOORS[0]);
+      this.state = 'map';
+      this.floorMapScreen.open(this.time);
+      this.banners.add(cls.name, cls.color);
+      Sound.tap();
+    }, this.time);
+  }
+
+  _applyClass(cls) {
+    this._playerClass = cls;
+    for (const id of cls.startingRelicIds) {
+      const relic = RELICS[id];
+      if (relic && !this.activeRelics.includes(relic)) {
+        this.activeRelics.push(relic);
+        if (relic.apply) relic.apply(this);
+      }
+    }
+    this._applyClassStatMods(cls);
+    this.sessionPearls += cls.startPearls || 0;
+    this.player.shield += cls.startShield || 0;
+  }
+
+  _applyClassStatMods(cls) {
+    if (!cls) return;
+    if (cls.statMods.dashCooldown != null)
+      this.player.stats.dashCooldown *= cls.statMods.dashCooldown;
+    if (cls.statMods.maxHealth != null) {
+      this.player.stats.maxHealth += cls.statMods.maxHealth;
+      this.player.health = Math.max(1, Math.min(this.player.health + cls.statMods.maxHealth, this.player.stats.maxHealth));
+    }
+    if (cls.statMods.magnetRadius != null)
+      this.player.stats.magnetRadius += cls.statMods.magnetRadius;
+    if (cls.statMods.pearlValue != null)
+      this.player.stats.pearlValue *= cls.statMods.pearlValue;
   }
 
   _startFloor(idx) {
@@ -506,6 +543,10 @@ export class Game {
           this._startRun();
           break;
 
+        case 'class-select':
+          this.classSelect.handleTap(x, y, this.time);
+          break;
+
         case 'map': {
           const sel = this.floorMapScreen.handleTap(x, y, this.mapState, this.time);
           if (sel) {
@@ -567,6 +608,7 @@ export class Game {
       if (this.state === 'relic-pick') this.relicPicker.handleMove(x, y);
       if (this.state === 'map') this.floorMapScreen.handleMove(x, y, this.mapState);
       if (this.state === 'choice') this.choiceScreen.handleMove(x, y);
+      if (this.state === 'class-select') this.classSelect.handleMove(x, y);
     };
 
     this.canvas.addEventListener('pointerdown', e => { e.preventDefault(); tap(e.clientX, e.clientY); });
@@ -575,6 +617,10 @@ export class Game {
     window.addEventListener('keydown', e => {
       if (e.repeat) return;
       if (e.code === 'KeyP' && this.state === 'playing') { this.paused = !this.paused; return; }
+      if (this.state === 'class-select') {
+        const n = parseInt(e.key);
+        if (n >= 1 && n <= CLASSES.length) { this.classSelect.handleKey(n - 1); return; }
+      }
       if (['Space', 'ArrowUp', 'KeyW'].includes(e.code)) tap(this.W * 0.75, this.H / 2);
       else if (['ShiftLeft', 'KeyX', 'KeyA'].includes(e.code)) tap(this.W * 0.25, this.H / 2);
     });
@@ -594,6 +640,9 @@ export class Game {
     this._buildPlayer();
     // Re-apply held relics' stat effects to the fresh player.
     for (const r of this.activeRelics) { if (r.apply) r.apply(this); }
+    // Re-apply class stat mods (not covered by relic hooks).
+    this._applyClassStatMods(this._playerClass);
+    if (this._playerClass) this.player.shield += this._playerClass.startShield || 0;
     this.obstacles.reset();
     this.pearls.reset();
     this.particles.reset();
@@ -713,6 +762,11 @@ export class Game {
 
     if (this.state === 'start') {
       this.bg.update(0.8, step, this.time);
+      return;
+    }
+
+    if (this.state === 'class-select') {
+      this.bg.update(0.4, step, this.time);
       return;
     }
 
@@ -928,6 +982,8 @@ export class Game {
 
     if (this.state === 'start') {
       // nothing extra behind start screen
+    } else if (this.state === 'class-select') {
+      this.classSelect.draw(ctx, W, H, this.time);
     } else if (this.state === 'map') {
       this.floorMapScreen.draw(ctx, W, H, this.mapState, this.time, this.cycleN, {
         health: this.player.health,
@@ -1076,6 +1132,8 @@ export class Game {
       }
     } else if (this.state === 'start') {
       this.startScreen.draw(ctx, W, H, this.time);
+      this.hud.drawMute(ctx, W, Sound.muted);
+    } else if (this.state === 'class-select') {
       this.hud.drawMute(ctx, W, Sound.muted);
     } else if (this.state === 'map') {
       this.hud.drawMute(ctx, W, Sound.muted);
