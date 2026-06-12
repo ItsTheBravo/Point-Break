@@ -51,7 +51,7 @@ export class HUD {
     }
   }
 
-  draw(ctx, W, H, player, sessionPearls, distM, bestM, combo, comboTimerFrac, muted, time, activeRelics) {
+  draw(ctx, W, H, player, sessionPearls, distM, bestM, combo, comboTimerFrac, muted, time, activeRelics, roomInfo = null) {
     const pad = 12;
 
     // ── Hearts ──
@@ -84,18 +84,29 @@ export class HUD {
     }
     ctx.restore();
 
-    // ── Distance, top-center ──
+    // ── Distance / Room info, top-center ──
     ctx.save();
-    ctx.font = "bold 22px 'Courier New', monospace";
     ctx.textAlign = 'center';
-    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4;
-    ctx.strokeText(`${distM}m`, W / 2, pad + 24);
-    ctx.fillStyle = '#cfe8ff';
-    ctx.fillText(`${distM}m`, W / 2, pad + 24);
-    if (bestM > 0 && distM < bestM) {
-      ctx.font = "11px 'Courier New', monospace";
-      ctx.fillStyle = 'rgba(180,210,235,0.55)';
-      ctx.fillText(`best ${bestM}m`, W / 2, pad + 40);
+    if (roomInfo) {
+      ctx.font = "bold 20px 'Courier New', monospace";
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4;
+      ctx.strokeText(`${roomInfo.roomDistM}m`, W / 2, pad + 22);
+      ctx.fillStyle = '#cfe8ff';
+      ctx.fillText(`${roomInfo.roomDistM}m`, W / 2, pad + 22);
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.fillStyle = 'rgba(140,185,220,0.8)';
+      ctx.fillText(`FLOOR ${roomInfo.floorNum}  ·  ${roomInfo.roomLabel}`, W / 2, pad + 38);
+    } else {
+      ctx.font = "bold 22px 'Courier New', monospace";
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4;
+      ctx.strokeText(`${distM}m`, W / 2, pad + 24);
+      ctx.fillStyle = '#cfe8ff';
+      ctx.fillText(`${distM}m`, W / 2, pad + 24);
+      if (bestM > 0 && distM < bestM) {
+        ctx.font = "11px 'Courier New', monospace";
+        ctx.fillStyle = 'rgba(180,210,235,0.55)';
+        ctx.fillText(`best ${bestM}m`, W / 2, pad + 40);
+      }
     }
     ctx.restore();
 

@@ -12,6 +12,9 @@ import { StartScreen } from './screens.js';
 import { Shake, Flash, FloatingTexts, Ripples, Banners } from './juice.js';
 import { RELICS, pickRelicChoices } from './relics.js';
 import { RelicPicker } from './relic-picker.js';
+import { FLOORS, ROOM_ICONS, buildFloorMap, availableNext, advanceMap } from './floor-data.js';
+import { FloorMapScreen } from './floor-map.js';
+import { createBoss } from './boss.js';
 
 export class Game {
   constructor(canvas) {
@@ -21,7 +24,6 @@ export class Game {
     this._resize();
     window.addEventListener('resize', () => this._resize());
 
-    // State machine: 'start' | 'playing' | 'dying' | 'relic-pick' | 'shop'
     this.state = 'start';
     this.time = 0;
     this.lastTs = 0;
@@ -41,12 +43,8 @@ export class Game {
     this.relicPicker = new RelicPicker();
     this.obstacles = new ObstacleManager(this.W, this.H);
     this.pearls = new PearlManager(this.W, this.H);
+    this.floorMapScreen = new FloorMapScreen();
 
-    // Run-scoped relic state.
-    this.activeRelics = [];
-    this.offeredRelicDistances = TUNE.relicOfferDistances.slice();
-
-    // Expose Sound so relics can call it.
     this.Sound = Sound;
 
     this.shop.onRestart = () => this._startRun();
@@ -73,20 +71,25 @@ export class Game {
   }
 
   _resetRunVars() {
-    this.distPx = 0;
+    this.roomDistPx = 0;
+    this.roomLengthPx = 0;
+    this.totalMeters = 0;
     this.speed = TUNE.baseSpeed;
     this.sessionPearls = 0;
     this.combo = 0;
     this.comboTimer = 0;
     this.bestComboTier = 1;
-    this.nextMilestone = TUNE.milestoneEveryM;
     this.announcedBest = false;
     this.deathTimer = 0;
+    this.currentRoom = null;
+    this.boss = null;
+    this._bossDefeatedHandled = false;
+    this.roomClearTimer = 0;
+    this.floorIdx = 0;
+    this.mapState = null;
+    this.cycleN = 0;
 
     this.activeRelics = [];
-    this.offeredRelicDistances = TUNE.relicOfferDistances.slice();
-    this._nextBiomeIdx = 1;
-    this._biomeTransitionTimer = 0;
     this._currentBiome = BIOMES[0];
 
     // Relic-specific counters.
@@ -100,15 +103,139 @@ export class Game {
     this.player = new Player(this.W * 0.24, this.H / 2, buildStats());
   }
 
+  // ── Run lifecycle ───────────────────────────────────────────────────────
+
   _startRun() {
-    this.state = 'playing';
     this._resetRunVars();
     this._buildPlayer();
     this.obstacles.reset();
     this.pearls.reset();
     this.particles.reset();
     this.floaters.items = [];
+    this._currentBiome = BIOMES[0];
     this.bg.startTransition(BIOMES[0], BIOMES[0]);
+    this.floorIdx = 0;
+    this.mapState = buildFloorMap(FLOORS[0]);
+    this.state = 'map';
+    this.floorMapScreen.open(this.time);
+  }
+
+  _startFloor(idx) {
+    this.floorIdx = idx;
+    const floor = FLOORS[idx];
+    this.mapState = buildFloorMap(floor);
+    this._currentBiome = BIOMES[floor.biomeIdx];
+    this.bg.startTransition(this._currentBiome, this._currentBiome);
+    this.banners.add(floor.name, this._currentBiome.glowColor || PAL.cyan);
+    Sound.biomeTransition();
+    this.state = 'map';
+    this.floorMapScreen.open(this.time);
+  }
+
+  _openMap() {
+    this.state = 'map';
+    this.floorMapScreen.open(this.time);
+    this.obstacles.items = [];
+    this.obstacles.spawnQueue = [];
+    this.pearls.items = [];
+    this.boss = null;
+    this._bossDefeatedHandled = false;
+  }
+
+  _enterRoom(layer, idx) {
+    const floor = FLOORS[this.floorIdx];
+    const room = floor.layers[layer][idx];
+    advanceMap(this.mapState, layer, idx);
+
+    this.currentRoom = room;
+    this.roomDistPx = 0;
+    this.roomLengthPx = (room.lengthM || 0) * TUNE.pxPerMeter;
+
+    const cycleScale = 1 + this.cycleN * 0.25;
+    this.speed = floor.baseSpeed * cycleScale;
+
+    this._currentBiome = BIOMES[floor.biomeIdx];
+    this.bg.startTransition(this._currentBiome, this._currentBiome);
+
+    this.obstacles.setRoomMode(room.type, floor.baseDifficulty);
+    this.obstacles.resetForRoom();
+    this.pearls.reset();
+
+    if (room.type === 'boss') {
+      this.boss = createBoss(floor.bossName, this.W, this.H);
+      this._bossDefeatedHandled = false;
+    } else {
+      this.boss = null;
+      this._bossDefeatedHandled = false;
+      if (room.type === 'treasure') {
+        for (let i = 0; i < 22; i++) {
+          const golden = Math.random() < 0.18;
+          this.pearls._spawnAt(
+            this.W + 60 + i * 55,
+            70 + Math.random() * (this.H - 140),
+            golden
+          );
+        }
+      }
+    }
+
+    // Reset player position, brief entry invincibility.
+    this.player.y = this.H / 2;
+    this.player.vy = 0;
+    this.player.angle = 0;
+    this.player.invincibleTimer = Math.max(this.player.invincibleTimer, 750);
+
+    const icon = ROOM_ICONS[room.type];
+    this.banners.add(icon ? icon.label : room.type.toUpperCase(), icon?.color || PAL.cyan);
+    this.state = 'playing';
+  }
+
+  // ── Room clear / floor clear / victory ─────────────────────────────────
+
+  _roomClear() {
+    if (this.state !== 'playing') return;
+    this.state = 'room-clear';
+    this.roomClearTimer = this.currentRoom.type === 'boss' ? 2600 : 1800;
+    Sound.milestone();
+    this.shake.add(0.4);
+    this.flash.trigger(PAL.good, 0.22);
+    this.banners.add('CLEAR!', PAL.good);
+    this.particles.emit(this.W / 2, this.H / 2, {
+      count: 30, color: PAL.pearl, speed: 3.8, spread: Math.PI * 2, radius: 3.5,
+    });
+  }
+
+  _floorClear() {
+    const isLast = this.floorIdx >= FLOORS.length - 1;
+    this.banners.add(`FLOOR ${this.floorIdx + 1} CLEAR!`, '#ffd866');
+    this.shake.add(0.65);
+    this.flash.trigger('#ffd866', 0.38);
+
+    if (isLast) {
+      this._offerRelics(() => this._showVictory());
+    } else {
+      this._offerRelics(() => this._startFloor(this.floorIdx + 1));
+    }
+  }
+
+  _showVictory() {
+    this.state = 'victory';
+    addTotalPearls(this.sessionPearls);
+    const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
+    const prev = getBestM();
+    if (distM > prev) setBestM(distM);
+    Sound.milestone();
+    this.shake.add(0.9);
+    this.flash.trigger('#ffd866', 0.55);
+    for (let i = 0; i < 8; i++) {
+      setTimeout(() => {
+        this.particles.emit(
+          this.W * (0.18 + Math.random() * 0.64),
+          this.H * (0.15 + Math.random() * 0.45),
+          { count: 28, color: i % 2 === 0 ? '#ffd866' : '#ff3b60', speed: 5.5, spread: Math.PI * 2, radius: 4.5 }
+        );
+      }, i * 190);
+    }
   }
 
   // ── Relic helpers ───────────────────────────────────────────────────────
@@ -121,13 +248,10 @@ export class Game {
     }
   }
 
-  _offerRelics() {
-    this.state = 'relic-pick';
+  _offerRelics(onDone) {
     const choices = pickRelicChoices(this.activeRelics, 3);
-    if (choices.length === 0) {
-      this.state = 'playing';
-      return;
-    }
+    if (choices.length === 0) { if (onDone) onDone(); return; }
+    this.state = 'relic-pick';
     Sound.relicOffer();
     this.relicPicker.show(choices, (chosen) => {
       this.activeRelics.push(chosen);
@@ -135,18 +259,17 @@ export class Game {
       Sound.relicPick();
       this.flash.trigger(PAL.gold, 0.2);
       this.banners.add(`${chosen.name}!`, PAL.gold);
-      this.state = 'playing';
+      if (onDone) onDone();
+      else this.state = 'playing';
     }, this.time);
   }
 
-  // ── Phantom twin ability ────────────────────────────────────────────────
+  // ── Phantom twin ────────────────────────────────────────────────────────
 
   _spawnPhantom() {
     this._phantomGhosts.push({
-      x: this.player.x,
-      y: this.player.y,
-      life: 1.2,
-      angle: this.player.angle,
+      x: this.player.x, y: this.player.y,
+      life: 1.2, angle: this.player.angle,
     });
   }
 
@@ -154,7 +277,6 @@ export class Game {
     for (const g of this._phantomGhosts) {
       g.x += speed * TUNE.dashSpeedMult * step;
       g.life -= dt / 1000;
-      // Collect pearls along path.
       for (const p of this.pearls.items) {
         if (p.collected) continue;
         const dx = p.x - g.x, dy = p.y - g.y;
@@ -163,7 +285,6 @@ export class Game {
           this._gainPearls(1, p.x, p.y, false);
         }
       }
-      // Shatter ice on path.
       for (const o of this.obstacles.items) {
         if (o.kind !== 'ice') continue;
         if (g.x > o.x && g.x < o.x + o.w) {
@@ -192,6 +313,16 @@ export class Game {
           Sound.tap();
           this._startRun();
           break;
+
+        case 'map': {
+          const sel = this.floorMapScreen.handleTap(x, y, this.mapState, this.time);
+          if (sel) {
+            Sound.tap();
+            this._enterRoom(sel.layer, sel.idx);
+          }
+          break;
+        }
+
         case 'playing': {
           if (x < this.W / 2) {
             if (this.player.dash()) {
@@ -217,17 +348,24 @@ export class Game {
           }
           break;
         }
+
         case 'relic-pick':
           this.relicPicker.handleTap(x, y, this.time);
           break;
+
         case 'shop':
           this.shop.handleTap(x, y, this.time);
+          break;
+
+        case 'victory':
+          this._loopVictory();
           break;
       }
     };
 
     const move = (x, y) => {
       if (this.state === 'relic-pick') this.relicPicker.handleMove(x, y);
+      if (this.state === 'map') this.floorMapScreen.handleMove(x, y, this.mapState);
     };
 
     this.canvas.addEventListener('pointerdown', e => { e.preventDefault(); tap(e.clientX, e.clientY); });
@@ -238,6 +376,32 @@ export class Game {
       if (['Space', 'ArrowUp', 'KeyW'].includes(e.code)) tap(this.W * 0.75, this.H / 2);
       else if (['ShiftLeft', 'KeyX', 'KeyA'].includes(e.code)) tap(this.W * 0.25, this.H / 2);
     });
+  }
+
+  _loopVictory() {
+    // Keep relics, full health, increment loop counter.
+    this.cycleN++;
+    this.sessionPearls = 0;
+    this.roomDistPx = 0;
+    this.totalMeters = 0;
+    this.combo = 0; this.comboTimer = 0;
+    this.bestComboTier = 1;
+    this.announcedBest = false;
+    this._buildPlayer();
+    this.obstacles.reset();
+    this.pearls.reset();
+    this.particles.reset();
+    this.floaters.items = [];
+    this.boss = null;
+    this._bossDefeatedHandled = false;
+    this.floorIdx = 0;
+    this.mapState = buildFloorMap(FLOORS[0]);
+    this._currentBiome = BIOMES[0];
+    this.bg.startTransition(BIOMES[0], BIOMES[0]);
+    this.state = 'map';
+    this.floorMapScreen.open(this.time);
+    this.banners.add(`LOOP ${this.cycleN + 1}`, '#ff7ad9');
+    Sound.biomeTransition();
   }
 
   // ── Combo / pearls ──────────────────────────────────────────────────────
@@ -258,25 +422,10 @@ export class Game {
     return gain;
   }
 
-  // ── Biome progression ───────────────────────────────────────────────────
-
-  _checkBiome(distM) {
-    if (this._nextBiomeIdx >= BIOMES.length) return;
-    const next = BIOMES[this._nextBiomeIdx];
-    if (distM >= next.startM) {
-      this._nextBiomeIdx++;
-      this._currentBiome = next;
-      this.bg.startTransition(BIOMES[this._nextBiomeIdx - 2] || BIOMES[0], next);
-      this.banners.add(next.name, next.glowColor || PAL.cyan);
-      Sound.biomeTransition();
-      this.shake.add(0.35);
-      this.flash.trigger(next.glowColor || '#ffffff', 0.18);
-    }
-  }
-
   // ── Death / Shop ────────────────────────────────────────────────────────
 
   _die() {
+    if (this.state !== 'playing') return;
     this.state = 'dying';
     this.deathTimer = 850;
     this.timeScale = 0.28;
@@ -294,7 +443,7 @@ export class Game {
   _openShop() {
     this.state = 'shop';
     this.timeScale = 1;
-    const distM = Math.floor(this.distPx / TUNE.pxPerMeter);
+    const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
     addTotalPearls(this.sessionPearls);
     const prevBest = getBestM();
     const isNewBest = distM > prevBest;
@@ -329,7 +478,6 @@ export class Game {
 
   _update(dtRaw) {
     this.time += dtRaw;
-
     if (this.hitstop > 0) { this.hitstop -= dtRaw; return; }
 
     const dt = dtRaw * this.timeScale;
@@ -348,26 +496,49 @@ export class Game {
       return;
     }
 
-    if (this.state === 'relic-pick' || this.state === 'shop') {
-      this.bg.update(0.5, step, this.time);
-      this.particles.update(step, 0.5);
+    if (this.state === 'map') {
+      this.bg.update(0.3, step, this.time);
       return;
     }
 
-    // ── 'playing' and 'dying' ──
-    const distM = Math.floor(this.distPx / TUNE.pxPerMeter);
+    if (this.state === 'victory') {
+      this.particles.update(step, 0);
+      return;
+    }
 
-    // Adrenaline relic speed modifier.
+    if (this.state === 'relic-pick' || this.state === 'shop') {
+      this.bg.update(0.5, step, this.time);
+      this.particles.update(step, 0.4);
+      return;
+    }
+
+    // ── playing, room-clear, dying ──
+    const floor = FLOORS[this.floorIdx] || FLOORS[0];
+    const cycleScale = 1 + this.cycleN * 0.25;
     const adrenalineBoost = (this._adrenalineActive && this.hasRelic('adrenaline_rush')) ? 1.5 : 1;
     this.speed = Math.min(TUNE.maxSpeed,
-      TUNE.baseSpeed + (this.distPx / 1000) * TUNE.speedRampPer1000px) * adrenalineBoost;
+      floor.baseSpeed * cycleScale + (this.roomDistPx / 1000) * TUNE.speedRampPer1000px
+    ) * adrenalineBoost;
+
+    if (this.state === 'room-clear') {
+      this.speed = Math.max(0, this.speed * Math.pow(0.93, stepRaw));
+      const ws = this.speed;
+      this.bg.update(ws, step, this.time);
+      this.particles.update(step, ws * 0.3);
+      this.floaters.update(dt, 0, step);
+      this.roomClearTimer -= dtRaw;
+      if (this.roomClearTimer <= 0) {
+        if (this.currentRoom.type === 'boss') this._floorClear();
+        else this._openMap();
+      }
+      return;
+    }
 
     const worldSpeed = this.player.isDashing ? this.speed * TUNE.dashSpeedMult : this.speed;
+    const biomeId = this._currentBiome?.id || 'reef';
 
-    // Biome transition lerp.
-    const transSpeed = 0.0004 * step;
-    this.bg.update(worldSpeed, step, this.time, transSpeed);
-    this.obstacles.update(worldSpeed, step, dt, this.time, this.distPx, this._currentBiome.id);
+    this.bg.update(worldSpeed, step, this.time);
+    this.obstacles.update(worldSpeed, step, dt, this.time, this.roomDistPx, biomeId);
     this.pearls.update(worldSpeed, step, this.time,
       this.state === 'playing' ? this.player : null,
       this.player.stats.magnetRadius);
@@ -381,10 +552,10 @@ export class Game {
     }
 
     // ── Playing only ──
-    this.distPx += worldSpeed * step;
+    this.roomDistPx += worldSpeed * step;
+    this.totalMeters += worldSpeed * step;
     this.player.update(dt, step, worldSpeed);
 
-    // Relic per-frame hooks.
     this._fireRelicHook('onUpdate', dt);
     if (this.hasRelic('phantom_twin')) this._updatePhantoms(step, this.speed, dt);
 
@@ -403,86 +574,72 @@ export class Game {
       if (this.state !== 'playing') return;
     }
 
+    // Boss update.
+    if (this.boss) {
+      this.boss.update(dt, step, this.player, this);
+      if (this.boss.defeated && !this._bossDefeatedHandled) {
+        this._bossDefeatedHandled = true;
+        this.banners.add(`${FLOORS[this.floorIdx].bossName} DEFEATED!`, '#ff3b60');
+        setTimeout(() => this._roomClear(), 1800);
+      }
+    }
+
     // Pearl collection.
     const { count: collected, hasGolden } = this.pearls.collect(this.player, this.time);
     if (collected > 0) {
       this.combo += collected;
       this.comboTimer = TUNE.comboWindowMs;
       this.bestComboTier = Math.max(this.bestComboTier, this.comboTier);
-
-      const prevCombo = this.combo - collected;
       Sound.pearl(this.combo);
       if (hasGolden) Sound.goldenPearl();
-
-      // Lucky spiral relic: 25% chance golden multiplier.
       const luckyMult = (this.hasRelic('lucky_spiral') && Math.random() < 0.25) ? 4 : 1;
-      const totalGain = this._gainPearls(collected * luckyMult, this.player.x, this.player.y, true);
-
+      this._gainPearls(collected * luckyMult, this.player.x, this.player.y, true);
       this._fireRelicHook('onPearl', collected);
-
-      // Pearl cascade relic: milestone fires.
+      const prevCombo = this.combo - collected;
       const crossedMilestone = Math.floor(prevCombo / 10) < Math.floor(this.combo / 10);
       if (crossedMilestone) this._fireRelicHook('onComboMilestone', this.combo);
-
       this.particles.emit(this.player.x + 10, this.player.y, {
         count: 6 * collected, color: hasGolden ? PAL.gold : PAL.pearl,
         speed: 2.8, spread: Math.PI * 2, radius: 2.5,
       });
     }
 
-    // Obstacle collision.
-    const hits = this.obstacles.collide(this.player);
-    for (const hit of hits) {
-      const canPhase = this.player.isDashing && this.hasRelic('void_passage');
-      if (canPhase) continue; // phase through everything
+    // Obstacle collision (not during boss rooms — boss handles its own).
+    if (!this.boss) {
+      const hits = this.obstacles.collide(this.player);
+      for (const hit of hits) {
+        const canPhase = this.player.isDashing && this.hasRelic('void_passage');
+        if (canPhase) continue;
 
-      if (hit.kind === 'spike_wheel' && this.player.isDashing) {
-        // Dashable spike wheel.
-        hit.obj.gone = true;
-        Sound.shatter();
-        this.hitstop = 45;
-        this.shake.add(0.3);
-        this.flash.trigger('#ff9040', 0.14);
-        this.particles.emit(hit.x, hit.y, { count: 18, color: '#a04020', speed: 4.5, spread: Math.PI * 2, radius: 4, shape: 'shard' });
-        this._gainPearls(1, hit.x, hit.y, false);
-        if (this.hasRelic('thirsty_tusk')) this._gainPearls(2, hit.x, hit.y, false);
-      } else if (hit.kind === 'ice' && this.player.isDashing) {
-        // Shatter ice.
-        hit.obj.destroy(hit.part);
-        Sound.shatter();
-        this.hitstop = 42;
-        this.shake.add(0.25);
-        this.flash.trigger('#bfe8ff', 0.12);
-        const iy = hit.part === 'top' ? hit.obj.topH / 2 : (hit.obj.botY + this.H) / 2;
-        this.particles.emit(hit.obj.x + hit.obj.w / 2, iy, { count: 18, color: PAL.ice, speed: 4.5, spread: Math.PI * 2, radius: 5, shape: 'shard' });
-        this._gainPearls(1, hit.obj.x + hit.obj.w / 2, iy, false);
-        if (this.hasRelic('thirsty_tusk')) this._gainPearls(3, hit.obj.x + hit.obj.w / 2, iy, false);
-      } else if (!this.player.invincible) {
-        this._applyDamage(hit.kind === 'laser');
-        break;
+        if (hit.kind === 'spike_wheel' && this.player.isDashing) {
+          hit.obj.gone = true;
+          Sound.shatter();
+          this.hitstop = 45;
+          this.shake.add(0.3);
+          this.flash.trigger('#ff9040', 0.14);
+          this.particles.emit(hit.x, hit.y, { count: 18, color: '#a04020', speed: 4.5, spread: Math.PI * 2, radius: 4, shape: 'shard' });
+          this._gainPearls(1, hit.x, hit.y, false);
+          if (this.hasRelic('thirsty_tusk')) this._gainPearls(2, hit.x, hit.y, false);
+        } else if (hit.kind === 'ice' && this.player.isDashing) {
+          hit.obj.destroy(hit.part);
+          Sound.shatter();
+          this.hitstop = 42;
+          this.shake.add(0.25);
+          this.flash.trigger('#bfe8ff', 0.12);
+          const iy = hit.part === 'top' ? hit.obj.topH / 2 : (hit.obj.botY + this.H) / 2;
+          this.particles.emit(hit.obj.x + hit.obj.w / 2, iy, { count: 18, color: PAL.ice, speed: 4.5, spread: Math.PI * 2, radius: 5, shape: 'shard' });
+          this._gainPearls(1, hit.obj.x + hit.obj.w / 2, iy, false);
+          if (this.hasRelic('thirsty_tusk')) this._gainPearls(3, hit.obj.x + hit.obj.w / 2, iy, false);
+        } else if (!this.player.invincible) {
+          this._applyDamage(hit.kind === 'laser');
+          break;
+        }
       }
     }
 
-    // Biome transitions.
-    this._checkBiome(distM);
-
-    // Relic offers at distance milestones.
-    if (this.offeredRelicDistances.length > 0 && distM >= this.offeredRelicDistances[0]) {
-      this.offeredRelicDistances.shift();
-      this._offerRelics();
-    }
-
-    // Distance milestones (banner + sound).
-    if (distM >= this.nextMilestone) {
-      this.banners.add(`${this.nextMilestone}m!`, PAL.gold);
-      Sound.milestone();
-      this.nextMilestone += TUNE.milestoneEveryM;
-    }
-    const best = getBestM();
-    if (!this.announcedBest && best > 50 && distM > best) {
-      this.announcedBest = true;
-      this.banners.add('NEW BEST!', '#ff7ad9');
-      Sound.milestone();
+    // Room clear check (non-boss rooms).
+    if (this.currentRoom && this.currentRoom.type !== 'boss' && this.roomDistPx >= this.roomLengthPx) {
+      this._roomClear();
     }
   }
 
@@ -491,17 +648,26 @@ export class Game {
   _draw() {
     const ctx = this.ctx;
     const { W, H } = this;
-    const distM = Math.floor(this.distPx / TUNE.pxPerMeter);
+    const roomDistM = Math.floor(this.roomDistPx / TUNE.pxPerMeter);
+    const totalDistM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
 
     ctx.save();
     const off = this.shake.offset();
     ctx.translate(off.x, off.y);
 
-    this.bg.draw(ctx, this.time, distM);
+    this.bg.draw(ctx, this.time, totalDistM);
 
-    if (this.state !== 'start') {
+    if (this.state === 'start') {
+      // nothing extra behind start screen
+    } else if (this.state === 'map') {
+      this.floorMapScreen.draw(ctx, W, H, this.mapState, this.time, this.cycleN);
+    } else if (this.state === 'victory') {
+      this._drawVictory(ctx, W, H);
+    } else if (this.state !== 'shop') {
+      // playing, room-clear, dying, relic-pick
       this.obstacles.draw(ctx, this.time, this.player.dashReady, this._currentBiome);
       this.pearls.draw(ctx, this.time);
+      if (this.boss) this.boss.draw(ctx, this.time, W, H);
       this.particles.draw(ctx);
 
       // Phantom twin ghosts.
@@ -510,18 +676,14 @@ export class Game {
         ctx.translate(g.x, g.y);
         ctx.rotate(g.angle);
         ctx.globalAlpha = g.life * 0.38;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = PAL.narDash;
-        // Simple ghost outline.
-        ctx.strokeStyle = PAL.narDash;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 25, 14, 0, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.shadowBlur = 12; ctx.shadowColor = PAL.narDash;
+        ctx.strokeStyle = PAL.narDash; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.ellipse(0, 0, 25, 14, 0, 0, Math.PI * 2); ctx.stroke();
         ctx.restore();
       }
 
-      if (this.state === 'playing') this.player.draw(ctx, this.time);
+      const showPlayer = this.state === 'playing' || this.state === 'room-clear' || this.state === 'dying';
+      if (showPlayer) this.player.draw(ctx, this.time);
       this.floaters.draw(ctx);
     }
 
@@ -531,24 +693,104 @@ export class Game {
     this.ripples.draw(ctx);
     this.flash.draw(ctx, W, H);
 
-    if (this.state === 'playing' || this.state === 'dying') {
-      this.hud.draw(ctx, W, H, this.player, this.sessionPearls, distM, getBestM(),
+    // ── HUD overlays ──
+    const inGame = this.state === 'playing' || this.state === 'dying' || this.state === 'room-clear';
+    if (inGame) {
+      const icon = this.currentRoom ? ROOM_ICONS[this.currentRoom.type] : null;
+      const roomInfo = this.currentRoom ? {
+        floorNum: this.floorIdx + 1,
+        roomLabel: icon?.label || this.currentRoom.type.toUpperCase(),
+        roomDistM,
+        roomLengthM: this.currentRoom.lengthM || 0,
+      } : null;
+      this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
         this.combo, Math.max(0, this.comboTimer / TUNE.comboWindowMs),
-        Sound.muted, this.time, this.activeRelics);
+        Sound.muted, this.time, this.activeRelics, roomInfo);
       this.banners.draw(ctx, W, H);
     } else if (this.state === 'start') {
       this.startScreen.draw(ctx, W, H, this.time);
       this.hud.drawMute(ctx, W, Sound.muted);
+    } else if (this.state === 'map') {
+      this.hud.drawMute(ctx, W, Sound.muted);
+      this.banners.draw(ctx, W, H);
     } else if (this.state === 'relic-pick') {
-      // Draw HUD underneath.
-      this.hud.draw(ctx, W, H, this.player, this.sessionPearls, distM, getBestM(),
-        this.combo, Math.max(0, this.comboTimer / TUNE.comboWindowMs),
-        Sound.muted, this.time, this.activeRelics);
+      const icon = this.currentRoom ? ROOM_ICONS[this.currentRoom.type] : null;
+      const roomInfo = this.currentRoom ? {
+        floorNum: this.floorIdx + 1,
+        roomLabel: icon?.label || this.currentRoom.type.toUpperCase(),
+        roomDistM, roomLengthM: this.currentRoom.lengthM || 0,
+      } : null;
+      this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
+        this.combo, 0, Sound.muted, this.time, this.activeRelics, roomInfo);
       this.relicPicker.draw(ctx, W, H, this.time);
     } else if (this.state === 'shop') {
       this.shop.draw(ctx, W, H, this.time);
       this.hud.drawMute(ctx, W, Sound.muted);
+    } else if (this.state === 'victory') {
+      this.particles.draw(ctx);
+      this.banners.draw(ctx, W, H);
+      this.hud.drawMute(ctx, W, Sound.muted);
     }
+  }
+
+  _drawVictory(ctx, W, H) {
+    ctx.fillStyle = 'rgba(2,8,18,0.88)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Stars sparkle
+    for (let i = 0; i < 18; i++) {
+      const sx = (Math.sin(i * 2.3 + this.time / 800) * 0.5 + 0.5) * W;
+      const sy = (Math.cos(i * 1.7 + this.time / 600) * 0.5 + 0.5) * H;
+      const sr = 1.5 + Math.sin(this.time / 200 + i) * 1.2;
+      ctx.fillStyle = `rgba(255,220,100,${0.4 + Math.sin(this.time / 300 + i) * 0.3})`;
+      ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Title
+    ctx.textAlign = 'center';
+    ctx.save();
+    ctx.shadowBlur = 30; ctx.shadowColor = '#ffd866';
+    ctx.font = "bold 44px 'Courier New', monospace";
+    ctx.fillStyle = '#ffd866';
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 7;
+    ctx.strokeText('VICTORY!', W / 2, H * 0.3);
+    ctx.fillText('VICTORY!', W / 2, H * 0.3);
+    ctx.restore();
+
+    ctx.font = "bold 16px 'Courier New', monospace";
+    ctx.fillStyle = '#cfe8ff';
+    ctx.fillText('ALL 3 FLOORS CLEARED', W / 2, H * 0.3 + 42);
+
+    if (this.cycleN > 0) {
+      ctx.font = "bold 13px 'Courier New', monospace";
+      ctx.fillStyle = '#ff7ad9';
+      ctx.fillText(`LOOP ${this.cycleN + 1} COMPLETE!`, W / 2, H * 0.3 + 66);
+    }
+
+    // Stats
+    const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
+    const statsY = H * 0.52;
+    const lines = [
+      [`${distM}m`, 'TRAVELED'],
+      [`${this.sessionPearls}`, 'PEARLS COLLECTED'],
+      [`${this.activeRelics.length}`, 'RELICS HELD'],
+    ];
+    ctx.font = "13px 'Courier New', monospace";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillStyle = '#ffd866';
+      ctx.fillText(lines[i][0], W / 2, statsY + i * 30);
+      ctx.fillStyle = 'rgba(140,185,220,0.75)';
+      ctx.fillText(lines[i][1], W / 2, statsY + i * 30 + 14);
+    }
+
+    // Continue prompt
+    const pulse = 0.6 + Math.sin(this.time / 360) * 0.3;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.font = "bold 14px 'Courier New', monospace";
+    ctx.fillStyle = '#ffd866';
+    ctx.fillText('TAP TO CONTINUE  ·  LOOP ∞', W / 2, H * 0.82);
+    ctx.restore();
   }
 
   _loop(ts) {

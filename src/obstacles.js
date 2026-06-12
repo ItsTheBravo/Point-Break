@@ -403,24 +403,38 @@ export class ObstacleManager {
     this.items = [];
     this.totalDist = 0;
     this.spawnQueue = [];
-    this._nextRegularSpawn = 600; // distance to first obstacle
+    this._nextRegularSpawn = 600;
+    this._roomMode = 'corridor';
+    this._roomBaseDiff = 0;
   }
 
   resize(W, H) { this.W = W; this.H = H; }
 
+  setRoomMode(type, baseDiff = 0) {
+    this._roomMode = type;
+    this._roomBaseDiff = baseDiff;
+  }
+
+  resetForRoom() {
+    this.items = [];
+    this.totalDist = 0;
+    this.spawnQueue = [];
+    this._nextRegularSpawn = this._roomMode === 'boss' ? 999999 : 240;
+  }
+
   update(speed, step, dt, time, distPx, biomeId) {
-    const difficulty = Math.min(1, Math.max(0, (distPx - TUNE.graceDistancePx) / 12000));
+    const ramp = Math.min(0.5, this.totalDist / 10000);
+    const difficulty = Math.max(this._roomBaseDiff, Math.min(1, this._roomBaseDiff + ramp));
     this.totalDist += speed * step;
 
-    // Process spawn queue.
     while (this.spawnQueue.length > 0 && this.spawnQueue[0].at <= this.totalDist) {
       this.spawnQueue.shift().fn(this, difficulty, biomeId);
     }
 
-    // Schedule regular spawns.
-    if (distPx > TUNE.graceDistancePx && this.totalDist >= this._nextRegularSpawn) {
-      const spacing = TUNE.obstacleSpacingStart -
-        (TUNE.obstacleSpacingStart - TUNE.obstacleSpacingMin) * difficulty;
+    if (this._roomMode !== 'boss' && this.totalDist >= this._nextRegularSpawn) {
+      const spacing = this._roomMode === 'treasure'
+        ? 540
+        : Math.max(120, TUNE.obstacleSpacingStart - (TUNE.obstacleSpacingStart - TUNE.obstacleSpacingMin) * difficulty);
       this._nextRegularSpawn = this.totalDist + spacing;
       this._schedulePattern(difficulty, biomeId);
     }
@@ -434,12 +448,46 @@ export class ObstacleManager {
   }
 
   _schedulePattern(difficulty, biomeId) {
-    const roll = Math.random();
     const d = this.totalDist;
+    const mode = this._roomMode;
 
-    // At low difficulty, mostly standard. At high difficulty, mostly patterns.
+    if (mode === 'treasure') {
+      this.spawnQueue.push({ at: d, fn: (m) => {
+        const gap = Math.min(TUNE.gapStart + 55, m.H * 0.58);
+        const gapY = 80 + gap / 2 + Math.random() * (m.H - 160 - gap);
+        m.items.push(new PillarPair(m.W + 30, gapY, gap, 'rock', m.H));
+      }});
+      this.spawnQueue.sort((a, b) => a.at - b.at);
+      return;
+    }
+
+    if (mode === 'ice_gauntlet') {
+      const roll = Math.random();
+      if (roll < 0.55) this._queueIceGauntlet(difficulty);
+      else if (roll < 0.8) this.spawnQueue.push({ at: d, fn: (m, di) => m._spawnPillars('ice', di) });
+      else this._queueChicane(difficulty);
+      this.spawnQueue.sort((a, b) => a.at - b.at);
+      return;
+    }
+
+    if (mode === 'hazard') {
+      const roll = Math.random();
+      if (roll < 0.3) this._queueMineField(Math.min(1, difficulty + 0.2));
+      else if (roll < 0.55) this._queueLaserSection(difficulty);
+      else if (roll < 0.78) {
+        for (let i = 0; i < 3; i++) {
+          this.spawnQueue.push({ at: d + i * 155, fn: (m) => {
+            m.items.push(new SpikeWheel(m.W + 30, 70 + Math.random() * (m.H - 140)));
+          }});
+        }
+      } else this._queueCompression(Math.min(1, difficulty + 0.15));
+      this.spawnQueue.sort((a, b) => a.at - b.at);
+      return;
+    }
+
+    // corridor: existing mixed pattern
+    const roll = Math.random();
     if (difficulty < 0.2 || roll < 0.35) {
-      // Simple single pillar.
       this.spawnQueue.push({ at: d, fn: (m, diff) => m._spawnPillars(Math.random() < 0.4 ? 'ice' : 'rock', diff) });
     } else if (roll < 0.52) {
       this._queueChicane(difficulty);
@@ -452,7 +500,6 @@ export class ObstacleManager {
     } else {
       this._queueCompression(difficulty);
     }
-
     this.spawnQueue.sort((a, b) => a.at - b.at);
   }
 
