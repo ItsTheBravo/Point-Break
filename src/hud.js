@@ -88,11 +88,12 @@ export class HUD {
     ctx.save();
     ctx.textAlign = 'center';
     if (roomInfo) {
+      const mainLabel = roomInfo.isTreasure ? `${roomInfo.roomDistM}s` : `${roomInfo.roomDistM}m`;
       ctx.font = "bold 20px 'Courier New', monospace";
       ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 4;
-      ctx.strokeText(`${roomInfo.roomDistM}m`, W / 2, pad + 22);
-      ctx.fillStyle = '#cfe8ff';
-      ctx.fillText(`${roomInfo.roomDistM}m`, W / 2, pad + 22);
+      ctx.strokeText(mainLabel, W / 2, pad + 22);
+      ctx.fillStyle = roomInfo.isTreasure ? '#ffd866' : '#cfe8ff';
+      ctx.fillText(mainLabel, W / 2, pad + 22);
       ctx.font = "bold 10px 'Courier New', monospace";
       ctx.fillStyle = 'rgba(140,185,220,0.8)';
       ctx.fillText(`FLOOR ${roomInfo.floorNum}  ·  ${roomInfo.roomLabel}`, W / 2, pad + 38);

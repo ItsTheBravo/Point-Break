@@ -74,6 +74,7 @@ export class Game {
     this.roomDistPx = 0;
     this.roomLengthPx = 0;
     this.totalMeters = 0;
+    this._treasureTimer = 0;
     this.speed = TUNE.baseSpeed;
     this.sessionPearls = 0;
     this.combo = 0;
@@ -168,11 +169,13 @@ export class Game {
       this.boss = null;
       this._bossDefeatedHandled = false;
       if (room.type === 'treasure') {
-        for (let i = 0; i < 22; i++) {
-          const golden = Math.random() < 0.18;
+        this._treasureTimer = 0;
+        // Spread pearls across the entire visible screen — CotL floating room feel.
+        for (let i = 0; i < 38; i++) {
+          const golden = Math.random() < 0.22;
           this.pearls._spawnAt(
-            this.W + 60 + i * 55,
-            70 + Math.random() * (this.H - 140),
+            60 + Math.random() * (this.W - 120),
+            55 + Math.random() * (this.H - 110),
             golden
           );
         }
@@ -534,7 +537,10 @@ export class Game {
       return;
     }
 
-    const worldSpeed = this.player.isDashing ? this.speed * TUNE.dashSpeedMult : this.speed;
+    const isTreasure = this.currentRoom?.type === 'treasure';
+    // Treasure rooms: near-zero scroll for a calm floating feel.
+    const scrollMult = isTreasure ? 0.12 : 1;
+    const worldSpeed = (this.player.isDashing ? this.speed * TUNE.dashSpeedMult : this.speed) * scrollMult;
     const biomeId = this._currentBiome?.id || 'reef';
 
     this.bg.update(worldSpeed, step, this.time);
@@ -554,6 +560,13 @@ export class Game {
     // ── Playing only ──
     this.roomDistPx += worldSpeed * step;
     this.totalMeters += worldSpeed * step;
+
+    // Treasure room: reduce gravity for buoyant floating feel.
+    if (isTreasure) {
+      this.player.vy = Math.min(this.player.vy, 3.2);
+      this.player.vy -= 0.07; // gentle upward buoyancy
+    }
+
     this.player.update(dt, step, worldSpeed);
 
     this._fireRelicHook('onUpdate', dt);
@@ -637,6 +650,22 @@ export class Game {
       }
     }
 
+    // Treasure room: timer-based end + trickle in more pearls.
+    if (isTreasure) {
+      const TREASURE_DUR = 20000;
+      this._treasureTimer += dtRaw;
+      // Trickle in fresh pearls as others get collected.
+      if (Math.random() < 0.015 && this.pearls.items.filter(p => !p.collected).length < 18) {
+        this.pearls._spawnAt(
+          this.W * (0.55 + Math.random() * 0.35),
+          60 + Math.random() * (this.H - 120),
+          Math.random() < 0.2
+        );
+      }
+      if (this._treasureTimer >= TREASURE_DUR) this._roomClear();
+      return;
+    }
+
     // Room clear check (non-boss rooms).
     if (this.currentRoom && this.currentRoom.type !== 'boss' && this.roomDistPx >= this.roomLengthPx) {
       this._roomClear();
@@ -697,11 +726,13 @@ export class Game {
     const inGame = this.state === 'playing' || this.state === 'dying' || this.state === 'room-clear';
     if (inGame) {
       const icon = this.currentRoom ? ROOM_ICONS[this.currentRoom.type] : null;
+      const isTreas = this.currentRoom?.type === 'treasure';
       const roomInfo = this.currentRoom ? {
         floorNum: this.floorIdx + 1,
         roomLabel: icon?.label || this.currentRoom.type.toUpperCase(),
-        roomDistM,
-        roomLengthM: this.currentRoom.lengthM || 0,
+        roomDistM: isTreas ? Math.ceil(Math.max(0, 20000 - this._treasureTimer) / 1000) : roomDistM,
+        roomLengthM: isTreas ? 20 : (this.currentRoom.lengthM || 0),
+        isTreasure: isTreas,
       } : null;
       this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
         this.combo, Math.max(0, this.comboTimer / TUNE.comboWindowMs),

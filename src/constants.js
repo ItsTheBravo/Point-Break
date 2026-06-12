@@ -7,7 +7,7 @@ export const TUNE = {
   baseSpeed: 4.2,
   maxSpeed: 12.0,
   speedRampPer1000px: 0.55,
-  pxPerMeter: 10,
+  pxPerMeter: 80,
 
   dashSpeedMult: 2.8,
   dashForwardLunge: 46,
