@@ -19,32 +19,32 @@ export const UPGRADES = [
   {
     id: 'max_health', name: 'Thick Blubber', icon: 'heart',
     desc: '+1 max health per level',
-    baseCost: 15, costGrowth: 12, maxLevel: 5,
+    baseCost: 22, costGrowth: 16, maxLevel: 8,
   },
   {
     id: 'dash_cooldown', name: 'Quick Tusk', icon: 'bolt',
-    desc: 'Dash recharges 0.4s faster',
-    baseCost: 20, costGrowth: 15, maxLevel: 5,
+    desc: 'Dash recharges faster each level',
+    baseCost: 28, costGrowth: 20, maxLevel: 7,
   },
   {
     id: 'dash_duration', name: 'Long Charge', icon: 'arrow',
-    desc: 'Dash lasts 90ms longer',
-    baseCost: 15, costGrowth: 12, maxLevel: 4,
+    desc: 'Dash lasts longer each level',
+    baseCost: 20, costGrowth: 16, maxLevel: 6,
   },
   {
     id: 'magnet', name: 'Pearl Magnet', icon: 'magnet',
     desc: 'Pull in pearls from further away',
-    baseCost: 12, costGrowth: 10, maxLevel: 4,
+    baseCost: 15, costGrowth: 12, maxLevel: 6,
   },
   {
     id: 'pearl_value', name: 'Lucky Shine', icon: 'gem',
-    desc: 'Pearls are worth +25% more',
-    baseCost: 18, costGrowth: 14, maxLevel: 4,
+    desc: 'Pearls are worth +20% more per level',
+    baseCost: 24, costGrowth: 18, maxLevel: 6,
   },
   {
     id: 'shield', name: 'Bubble Shield', icon: 'shield',
     desc: 'Start each run with a free hit',
-    baseCost: 40, costGrowth: 45, maxLevel: 2,
+    baseCost: 60, costGrowth: 65, maxLevel: 3,
   },
 ];
 
@@ -75,13 +75,14 @@ export function buyUpgrade(id) {
 }
 
 export function buildStats() {
-  const magnetTiers = [0, 70, 110, 150, 190];
+  // Tiers match old level 4 max (190) so existing saves don't degrade.
+  const magnetTiers = [0, 65, 110, 152, 190, 224, 255];
   return {
     maxHealth: 3 + getLevel('max_health'),
-    dashCooldown: 3000 - 400 * getLevel('dash_cooldown'),
-    dashDuration: 420 + 90 * getLevel('dash_duration'),
-    magnetRadius: magnetTiers[getLevel('magnet')],
-    pearlValue: 1 + 0.25 * getLevel('pearl_value'),
+    dashCooldown: 3000 - 280 * getLevel('dash_cooldown'),
+    dashDuration: 420 + 80 * getLevel('dash_duration'),
+    magnetRadius: magnetTiers[Math.min(getLevel('magnet'), magnetTiers.length - 1)],
+    pearlValue: 1 + 0.20 * getLevel('pearl_value'),
     shield: getLevel('shield'),
     swimForce: TUNE.swimForce,
   };
