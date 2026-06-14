@@ -1,5 +1,5 @@
 import { TUNE, PAL, BIOMES } from './constants.js';
-import { buildStats, addTotalPearls, getBestM, setBestM, bumpStat, maxStat } from './storage.js';
+import { buildStats, addTotalPearls, getBestM, setBestM, getBestClassicM, setBestClassicM, bumpStat, maxStat } from './storage.js';
 import { checkNewUnlocks } from './unlocks.js';
 import { Sound } from './audio.js';
 import { Player } from './player.js';
@@ -31,7 +31,7 @@ export class Game {
     window.addEventListener('resize', () => this._resize());
 
     // States: start | class-select | map | playing | room-clear | relic-pick | run-shop |
-    //         choice | victory | dying | shop
+    //         choice | victory | dying | shop | classic-dead
     this.state = 'start';
     this.time = 0;
     this.lastTs = 0;
@@ -119,6 +119,12 @@ export class Game {
     this._playerClass = null;
     this._moonShellCounter = 0;
     this._runMaxCombo = 0;
+    this._classicMode = false;
+    this._classicElapsed = 0;
+    this._classicBiomeIdx = 0;
+    this._classicDeadData = null;
+    this._classicRetryRect = null;
+    this._classicMenuRect = null;
   }
 
   _buildPlayer() {
@@ -149,6 +155,34 @@ export class Game {
       this.banners.add(cls.name, cls.color);
       Sound.tap();
     }, this.time);
+  }
+
+  _startClassic() {
+    this._resetRunVars();
+    this._classicMode = true;
+    this._buildPlayer();
+    this.obstacles.setRoomMode('combat', 0);
+    this.obstacles.resetForRoom();
+    this.pearls.reset();
+    this.particles.reset();
+    this.floaters.items = [];
+    this._currentBiome = BIOMES[0];
+    this._classicBiomeIdx = 0;
+    this.bg.startTransition(BIOMES[0], BIOMES[0]);
+    this.speed = TUNE.baseSpeed;
+    this.state = 'playing';
+    this.banners.add('CLASSIC', '#ffd866');
+    Sound.biomeTransition();
+  }
+
+  _openClassicDead() {
+    this.state = 'classic-dead';
+    this.timeScale = 1;
+    const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
+    const prev = getBestClassicM();
+    const isNewBest = distM > prev;
+    if (isNewBest) setBestClassicM(distM);
+    this._classicDeadData = { distM, bestM: Math.max(distM, prev), isNewBest };
   }
 
   _applyClass(cls) {
@@ -552,8 +586,27 @@ export class Game {
       switch (this.state) {
         case 'start':
           Sound.tap();
-          this._startRun();
+          if (this.startScreen.hitClassic(x, y)) this._startClassic();
+          else if (this.startScreen.hitRogue(x, y)) this._startRun();
           break;
+
+        case 'classic-dead': {
+          const d = this._classicDeadData;
+          if (!d) break;
+          if (this._classicRetryRect) {
+            const r = this._classicRetryRect;
+            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+              Sound.tap(); this._startClassic(); break;
+            }
+          }
+          if (this._classicMenuRect) {
+            const r = this._classicMenuRect;
+            if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+              Sound.tap(); this.state = 'start'; break;
+            }
+          }
+          break;
+        }
 
         case 'class-select':
           this.classSelect.handleTap(x, y, this.time);
@@ -784,7 +837,7 @@ export class Game {
       return;
     }
 
-    if (this.state === 'class-select') {
+    if (this.state === 'class-select' || this.state === 'classic-dead') {
       this.bg.update(0.4, step, this.time);
       return;
     }
@@ -813,9 +866,29 @@ export class Game {
     const floor = FLOORS[this.floorIdx] || FLOORS[0];
     const cycleScale = 1 + this.cycleN * 0.25;
     const adrenalineBoost = (this._adrenalineActive && this.hasRelic('adrenaline_rush')) ? 1.5 : 1;
-    this.speed = Math.min(TUNE.maxSpeed,
-      floor.baseSpeed * cycleScale + (this.roomDistPx / 1000) * TUNE.speedRampPer1000px
-    ) * adrenalineBoost;
+
+    if (this._classicMode) {
+      this._classicElapsed += dt;
+      // Speed: 4.2 → ~11 over about 3 minutes
+      this.speed = Math.min(TUNE.maxSpeed * 0.92, TUNE.baseSpeed + this._classicElapsed / 22000);
+      // Difficulty: 0 → 0.8 over 3 minutes (internal ramp adds up to 0.25 on top)
+      this.obstacles._roomBaseDiff = Math.min(0.80, this._classicElapsed / 150000);
+      // Biome: shift every 600m
+      const distM = Math.floor(this.totalMeters / TUNE.pxPerMeter);
+      const newBi = Math.floor(distM / 600) % BIOMES.length;
+      if (newBi !== this._classicBiomeIdx) {
+        this._classicBiomeIdx = newBi;
+        const next = BIOMES[newBi];
+        this.bg.startTransition(this._currentBiome, next);
+        this._currentBiome = next;
+        Sound.biomeTransition();
+        this.banners.add(next.name, next.glowColor || PAL.cyan);
+      }
+    } else {
+      this.speed = Math.min(TUNE.maxSpeed,
+        floor.baseSpeed * cycleScale + (this.roomDistPx / 1000) * TUNE.speedRampPer1000px
+      ) * adrenalineBoost;
+    }
 
     if (this.state === 'room-clear') {
       this.speed = Math.max(0, this.speed * Math.pow(0.93, stepRaw));
@@ -852,7 +925,10 @@ export class Game {
 
     if (this.state === 'dying') {
       this.deathTimer -= dtRaw;
-      if (this.deathTimer <= 0) this._openShop();
+      if (this.deathTimer <= 0) {
+        if (this._classicMode) this._openClassicDead();
+        else this._openShop();
+      }
       return;
     }
 
@@ -977,8 +1053,8 @@ export class Game {
       return;
     }
 
-    // Room clear check (non-boss rooms).
-    if (this.currentRoom && this.currentRoom.type !== 'boss' && this.roomDistPx >= this.roomLengthPx) {
+    // Room clear check (non-boss, non-classic rooms).
+    if (!this._classicMode && this.currentRoom && this.currentRoom.type !== 'boss' && this.roomDistPx >= this.roomLengthPx) {
       this._roomClear();
     }
   }
@@ -1106,9 +1182,15 @@ export class Game {
     };
 
     if (inGame) {
-      this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM, getBestM(),
+      const classicRoomInfo = this._classicMode ? {
+        floorNum: 0, roomLabel: 'CLASSIC', isTreasure: false,
+        roomDistM: totalDistM, roomLengthM: 0,
+      } : null;
+      this.hud.draw(ctx, W, H, this.player, this.sessionPearls, totalDistM,
+        this._classicMode ? getBestClassicM() : getBestM(),
         this.combo, Math.max(0, this.comboTimer / this.comboWindow),
-        Sound.muted, this.time, this.activeRelics, buildRoomInfo());
+        Sound.muted, this.time, this.activeRelics,
+        this._classicMode ? classicRoomInfo : buildRoomInfo());
       this.hud.drawPause(ctx, W, this.paused);
       this.banners.draw(ctx, W, H);
 
@@ -1152,6 +1234,9 @@ export class Game {
         ctx.fillText('TAP TO RESUME', W / 2, H / 2 + 22);
         ctx.restore();
       }
+    } else if (this.state === 'classic-dead') {
+      this._drawClassicDead(ctx, W, H);
+      this.hud.drawMute(ctx, W, Sound.muted);
     } else if (this.state === 'start') {
       this.startScreen.draw(ctx, W, H, this.time);
       this.hud.drawMute(ctx, W, Sound.muted);
@@ -1180,6 +1265,90 @@ export class Game {
       this.banners.draw(ctx, W, H);
       this.hud.drawMute(ctx, W, Sound.muted);
     }
+  }
+
+  _drawClassicDead(ctx, W, H) {
+    const d = this._classicDeadData;
+    if (!d) return;
+    const t = this.time;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,8,18,0.90)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+
+    // Title
+    ctx.font = "bold 28px 'Courier New', monospace";
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 5;
+    ctx.strokeText('GAME OVER', W / 2, H * 0.28);
+    ctx.fillStyle = '#ffd866';
+    ctx.fillText('GAME OVER', W / 2, H * 0.28);
+
+    // Score
+    ctx.font = "bold 48px 'Courier New', monospace";
+    ctx.strokeText(`${d.distM}m`, W / 2, H * 0.44);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${d.distM}m`, W / 2, H * 0.44);
+
+    if (d.isNewBest) {
+      const fl = 0.7 + Math.sin(t / 160) * 0.3;
+      ctx.font = "bold 15px 'Courier New', monospace";
+      ctx.fillStyle = `rgba(255,216,102,${fl})`;
+      ctx.fillText('★  NEW BEST  ★', W / 2, H * 0.52);
+    } else {
+      ctx.font = "13px 'Courier New', monospace";
+      ctx.fillStyle = 'rgba(156,195,224,0.7)';
+      ctx.fillText(`best  ${d.bestM}m`, W / 2, H * 0.52);
+    }
+
+    // Buttons
+    const bw = Math.min(160, (W - 60) / 2);
+    const bh = 52;
+    const gap = 16;
+    const totalW = bw * 2 + gap;
+    const by = H * 0.63;
+    const retryX = (W - totalW) / 2;
+    const menuX  = retryX + bw + gap;
+
+    this._classicRetryRect = { x: retryX, y: by, w: bw, h: bh };
+    this._classicMenuRect  = { x: menuX,  y: by, w: bw, h: bh };
+
+    const bob = Math.sin(t / 320) * 2;
+
+    // Retry button
+    ctx.save();
+    ctx.shadowBlur = 16; ctx.shadowColor = 'rgba(255,216,102,0.35)';
+    ctx.fillStyle = 'rgba(60,42,8,0.95)';
+    this._rr(ctx, retryX, by + bob, bw, bh, 12); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,216,102,0.7)'; ctx.lineWidth = 1.8;
+    this._rr(ctx, retryX, by + bob, bw, bh, 12); ctx.stroke();
+    ctx.fillStyle = '#ffd866';
+    ctx.font = "bold 15px 'Courier New', monospace";
+    ctx.fillText('▶  RETRY', retryX + bw / 2, by + bob + bh / 2 + 5);
+    ctx.restore();
+
+    // Menu button
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,22,40,0.92)';
+    this._rr(ctx, menuX, by, bw, bh, 12); ctx.fill();
+    ctx.strokeStyle = 'rgba(57,230,255,0.45)'; ctx.lineWidth = 1.8;
+    this._rr(ctx, menuX, by, bw, bh, 12); ctx.stroke();
+    ctx.fillStyle = 'rgba(140,185,220,0.85)';
+    ctx.font = "bold 15px 'Courier New', monospace";
+    ctx.fillText('MENU', menuX + bw / 2, by + bh / 2 + 5);
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  _rr(ctx, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
   _drawVictory(ctx, W, H) {

@@ -92,6 +92,8 @@ export function getTotalPearls() { return Storage.get('total_pearls', 0); }
 export function addTotalPearls(n) { Storage.set('total_pearls', getTotalPearls() + n); }
 export function getBestM() { return Storage.get('best_m', 0); }
 export function setBestM(m) { Storage.set('best_m', m); }
+export function getBestClassicM() { return Storage.get('best_classic_m', 0); }
+export function setBestClassicM(m) { Storage.set('best_classic_m', m); }
 
 // ── Lifetime stats (feed the unlock system in unlocks.js) ──
 
